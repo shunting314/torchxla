@@ -649,6 +649,12 @@ void XLATensor::ClearShardingSpec() {
   }
   data()->sharding_spec = nullptr;
 }
+void XLATensor::ClearShardingSpec() {
+  if (data()->ir_value.node != nullptr) {
+    data()->ir_value.node->ClearSharding();
+  }
+  data()->sharding_spec = nullptr;
+}
 
 void XLATensor::SetXlaData(torch::lazy::BackendDataPtr xla_data) {
 <<<<<<< HEAD
