@@ -1359,6 +1359,7 @@ at::Tensor XLANativeFunctions::expand(const at::Tensor & self,
   std::vector<torch::lazy::NodePtr> size_nodes;
   std::vector<int64_t> upper_bounds;
   std::vector<bool> dynamic_dims;
+  /* TODO: move this code to a helper function */
   for (auto& _size : _sizes) {
     std::shared_ptr<c10::SymbolicIntNode> _symbolicIntNode = _size.toSymbolicIntNode();
     auto _lazySymIntNode = std::dynamic_pointer_cast<torch::lazy::SymbolicIntNode>(_symbolicIntNode);
@@ -1367,8 +1368,7 @@ at::Tensor XLANativeFunctions::expand(const at::Tensor & self,
     upper_bounds.push_back(std::dynamic_pointer_cast<torch_xla::DimensionNode>(size_node)->getStaticValue());
     dynamic_dims.push_back(std::dynamic_pointer_cast<torch_xla::DimensionNode>(size_node)->isDynamic());
   }
-
-  return bridge::AtenFromXlaTensor(XLATensor::dynamic_expand(
+  return bridge::AtenFromXlaTensor(XLATensor::expand(
       bridge::GetXlaTensor(self), size_nodes, upper_bounds, dynamic_dims));
 }
 
