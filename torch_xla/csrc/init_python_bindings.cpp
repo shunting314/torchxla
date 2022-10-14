@@ -1490,10 +1490,40 @@ void InitXlaModuleBindings(py::module m) {
 
       // add tensor_id after we make sure the handle does not exist yet.
       tensor_ids.push_back(infoptr->tensor_id);
+      // why do we need to recreate here, it will change tensor ID
       auto tensor = bridge::AtenFromXlaTensor(torch_xla::XLATensor::Create(backend_data));
       ivalues.emplace_back(tensor);
     }
     return std::make_pair(tensor_ids, ivalues);
+  });
+
+  m.def("_check_tensor_need_materialization",
+        [](const std::vector<at::Tensor>& tensors) -> std::vector<bool> {
+    std::vector<bool> need_materialization;
+    need_materialization.reserve(tensors.size());
+    for (auto& tensor : tensors) {
+      auto xtensor = bridge::TryGetXlaTensor(tensor);
+      if (!xtensor) {
+        // input tensor is not a xla tensor
+        need_materialization.push_back(false);
+      } else if (xtensor->CurrentXlaData() != nullptr) {
+        // input tensor has xla_data which means it is already on device
+        need_materialization.push_back(true);
+      } else if (xtensor->CurrentIrValue().node != nullptr){
+        torch::lazy::NodePtr node = xtensor->CurrentIrValue().node;
+        if (torch_xla::DeviceData::Cast(xtensor->CurrentIrValue().node.get()) !=nullptr) {
+          need_materialization.push_back(false);
+        } else {
+          // input tensor is an IR other than DeviceData which means a compuation
+          // is required to get the value of this tensor.
+          need_materialization.push_back(true);
+        }
+      } else {
+        // TODO: maybe also handle it is a XLATensor with tensor_data case
+        XLA_CHECK(false);
+      }
+    }
+    return need_materialization;
   });
 
   m.def("_run_cached_graph", [](const std::string& hash_str, const std::vector<at::IValue>& graph_inputs) -> std::tuple<std::vector<at::Tensor>, std::vector<int64_t>, std::vector<int64_t>> {
@@ -1504,10 +1534,6 @@ void InitXlaModuleBindings(py::module m) {
     // TODO implement a fallback mechanism, or make sure those entries never get kicked out
     TORCH_CHECK(cachedComputation, "Failed to get computation by hash. Maybe the entry get kicked out of the LRU cache");
     auto start_prep_input = std::chrono::high_resolution_clock::now();
-
-    // TODO TODO: we can compare torch::lazy::BackendDataPtr's raw_ptr to determine
-    // if a tensor get inplace updated! (similar to a handle)
-    // Write some unit test for this to verify
 
     // setup the parameters_data
     std::vector<xla::ComputationClient::DataPtr> parameters_data;
