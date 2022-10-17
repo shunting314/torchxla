@@ -1490,7 +1490,9 @@ void InitXlaModuleBindings(py::module m) {
 
       // add tensor_id after we make sure the handle does not exist yet.
       tensor_ids.push_back(infoptr->tensor_id);
-      // why do we need to recreate here, it will change tensor ID
+      // This will create a new TensorId which is not ideal. However there is not an easy way
+      // to get the origional tensor with the tensor_id.
+      // TODO(JackCaoG): invesgate if we have idle XLATensor.
       auto tensor = bridge::AtenFromXlaTensor(torch_xla::XLATensor::Create(backend_data));
       ivalues.emplace_back(tensor);
     }
@@ -1527,7 +1529,7 @@ void InitXlaModuleBindings(py::module m) {
   });
 
   m.def("_run_cached_graph", [](const std::string& hash_str, const std::vector<at::IValue>& graph_inputs) -> std::vector<at::Tensor> {
-    LOG(ERROR) << "Enter _run_cached_graph"; // TODO
+    // LOG(ERROR) << "Enter _run_cached_graph"; // TODO
     TORCH_CHECK(hash_str.size() == sizeof(torch::lazy::hash_t));
     torch::lazy::hash_t hash = *(torch::lazy::hash_t*) (hash_str.c_str());
     auto cachedComputation = XLATensor::GetComputationCache()->Get(hash);
@@ -1539,12 +1541,6 @@ void InitXlaModuleBindings(py::module m) {
     std::vector<xla::ComputationClient::DataPtr> parameters_data;
     auto device = torch_xla::GetCurrentDevice();
     int idx = 0;
-    const auto& to_handle = [](torch::lazy::BackendDataPtr dataPtr) -> int64_t {
-      if (!dataPtr) {
-        return -314;
-      }
-      return UnwrapXlaData(dataPtr)->GetOpaqueHandle();
-    };
     for (auto& ivalue : graph_inputs) {
       auto tensor = ivalue.toTensor();
       auto xlaTensorOpt = bridge::TryGetXlaTensor(tensor);
@@ -1576,7 +1572,7 @@ void InitXlaModuleBindings(py::module m) {
     auto done_prep_input = std::chrono::high_resolution_clock::now();
     auto elapse_ms_prep_input = std::chrono::duration_cast<std::chrono::milliseconds>(done_prep_input - start_prep_input);
 
-    LOG(ERROR) << "In _run_cached_graph: input prepared " << elapse_ms_prep_input.count() << " ms"; // TODO
+    // LOG(ERROR) << "In _run_cached_graph: input prepared " << elapse_ms_prep_input.count() << " ms"; // TODO
 
     std::string deviceStr = device.toString();
     xla::ComputationClient::ExecuteComputationOptions options;
@@ -1588,21 +1584,21 @@ void InitXlaModuleBindings(py::module m) {
     );
     auto done_comp = std::chrono::high_resolution_clock::now();
     auto elapse_ms_comp = std::chrono::duration_cast<std::chrono::milliseconds>(done_comp - done_prep_input);
-    LOG(ERROR) << "In _run_cached_graph: computation done " << elapse_ms_comp.count() << " ms"; // TODO
+    // LOG(ERROR) << "In _run_cached_graph: computation done " << elapse_ms_comp.count() << " ms"; // TODO
 
     // Convert result back to tensor
     std::vector<at::Tensor> retlist;
     int i = 0;
     for (auto& data : results) {
+      // TODO(JackCaoG): invesgate new tensor here.)
       auto xlaTensor = torch_xla::XLATensor::Create(
         torch_xla::WrapXlaData(data));
-      // std::cout << " new handle " << i << " " << xlaTensor.CurrentXlaData().get() << std::endl; // TODO
       retlist.push_back(bridge::AtenFromXlaTensor(xlaTensor));
       ++i;
     }
     auto done_prep_output = std::chrono::high_resolution_clock::now();
     auto elapse_ms_prep_output = std::chrono::duration_cast<std::chrono::milliseconds>(done_prep_output - done_comp);
-    LOG(ERROR) << "Leave _run_cached_graph " << elapse_ms_prep_output.count() << " ms"; // TODO
+    // LOG(ERROR) << "Leave _run_cached_graph " << elapse_ms_prep_output.count() << " ms"; // TODO
     return retlist;
   });
 }
