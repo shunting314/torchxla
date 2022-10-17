@@ -1529,7 +1529,6 @@ void InitXlaModuleBindings(py::module m) {
   });
 
   m.def("_run_cached_graph", [](const std::string& hash_str, const std::vector<at::IValue>& graph_inputs) -> std::vector<at::Tensor> {
-    // LOG(ERROR) << "Enter _run_cached_graph"; // TODO
     TORCH_CHECK(hash_str.size() == sizeof(torch::lazy::hash_t));
     torch::lazy::hash_t hash = *(torch::lazy::hash_t*) (hash_str.c_str());
     auto cachedComputation = XLATensor::GetComputationCache()->Get(hash);
@@ -1544,7 +1543,6 @@ void InitXlaModuleBindings(py::module m) {
     for (auto& ivalue : graph_inputs) {
       auto tensor = ivalue.toTensor();
       auto xlaTensorOpt = bridge::TryGetXlaTensor(tensor);
-      // LOG(ERROR) << "Arg " << idx << ": is xla tensor? " << !!xlaTensorOpt;
       xla::ComputationClient::DataPtr dataptr;
       if (xlaTensorOpt) {
         torch::lazy::BackendDataPtr backend_data_ptr = xlaTensorOpt->GetXlaData();
@@ -1556,23 +1554,13 @@ void InitXlaModuleBindings(py::module m) {
         dataptr = ((torch_xla::XLAData*) backend_data.get())->xla_data();
       }
 
-      // Get BackendDataPtr from XLATensor
-      // UnwrapXlaData: get XLAData* from BackendDataPtr
       ++idx;
       parameters_data.push_back(dataptr);
     }
 
-    #if 0
-    std::cout << "Orig handles:" << std::endl;
-    for (int i = 0; i < orig_handles.size(); ++i) {
-      std::cout << " " << i << " " << orig_handles[i] << std::endl; // TODO
-    }
-    #endif
-
     auto done_prep_input = std::chrono::high_resolution_clock::now();
     auto elapse_ms_prep_input = std::chrono::duration_cast<std::chrono::milliseconds>(done_prep_input - start_prep_input);
-
-    // LOG(ERROR) << "In _run_cached_graph: input prepared " << elapse_ms_prep_input.count() << " ms"; // TODO
+    // LOG(ERROR) << "In _run_cached_graph: input prepared " << elapse_ms_prep_input.count() << " ms";
 
     std::string deviceStr = device.toString();
     xla::ComputationClient::ExecuteComputationOptions options;
