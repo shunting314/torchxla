@@ -1217,7 +1217,8 @@ class XLATensor : public c10::intrusive_ptr_target {
 
   // XLATensor sharding annotation. ShardingSpec wraps xla::OpSharding and
   // can be extended to hold other sharding information from the user.
-  static torch::lazy::hash_t GetGraphHash(const std::vector<XLATensorPtr>& tensors);
+  static torch::lazy::hash_t GetGraphHash(
+      const std::vector<XLATensorPtr>& tensors);
 
   // XLA SPMD sharding spec annoation. The XLA tensor uses this to create
   // HloSharding for replication, manual and tile shardings.

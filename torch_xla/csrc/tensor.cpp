@@ -1907,14 +1907,16 @@ std::string XLASymIntNodeImpl::str() {
   return "Static bound: " +
          std::to_string(DimCast(node().get())->getStaticValue());
 }
-  
-torch::lazy::hash_t XLATensor::GetGraphHash(const std::vector<XLATensorPtr>& tensors) {
+
+torch::lazy::hash_t XLATensor::GetGraphHash(
+    const std::vector<XLATensorPtr>& tensors) {
   SyncTensorsConfig config;
   config.sync_xla_data = true;
 
   auto coll = CollectSyncTensors(tensors, config);
   auto po_data = RunPostOrder(tensors, &coll);
-  return torch::lazy::HashCombine(coll.hash, torch::lazy::Hash(po_data.parameter_sequence));
+  return torch::lazy::HashCombine(
+      coll.hash, torch::lazy::Hash(po_data.parameter_sequence));
 }
 
 }  // namespace torch_xla
