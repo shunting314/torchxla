@@ -1443,7 +1443,7 @@ void InitXlaModuleBindings(py::module m) {
 
   // APIs added for dynamo integration
   m.def("_get_graph_hash", [](const std::vector<at::Tensor>& tensors) {
-    std::vector<XLATensor> xtensors;
+    std::vector<XLATensorPtr> xtensors;
     xtensors.reserve(tensors.size());
     for (auto& tensor : tensors) {
       xtensors.push_back(bridge::GetXlaTensor(tensor));

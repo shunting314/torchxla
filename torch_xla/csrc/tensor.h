@@ -1217,7 +1217,7 @@ class XLATensor : public c10::intrusive_ptr_target {
 
   // XLATensor sharding annotation. ShardingSpec wraps xla::OpSharding and
   // can be extended to hold other sharding information from the user.
-  static torch::lazy::hash_t GetGraphHash(const std::vector<XLATensor>& tensors);
+  static torch::lazy::hash_t GetGraphHash(const std::vector<XLATensorPtr>& tensors);
 
   // XLA SPMD sharding spec annoation. The XLA tensor uses this to create
   // HloSharding for replication, manual and tile shardings.
@@ -1239,10 +1239,12 @@ class XLATensor : public c10::intrusive_ptr_target {
 
   struct CachedComputation {
     CachedComputation(
-        std::shared_ptr<xla::ComputationClient::Computation> computation)
-        : computation(std::move(computation)) {}
+        std::shared_ptr<xla::ComputationClient::Computation> computation,
+        bool is_sharded = false)
+        : computation(std::move(computation)), is_sharded(is_sharded) {}
 
     std::shared_ptr<xla::ComputationClient::Computation> computation;
+    bool is_sharded;
   };
 
   using ComputationCache =
@@ -1285,20 +1287,6 @@ class XLATensor : public c10::intrusive_ptr_target {
     std::vector<torch::lazy::BackendDataPtr> parameters_data;
     bool is_sharded = false;
   };
-
-  struct CachedComputation {
-    CachedComputation(
-        std::shared_ptr<xla::ComputationClient::Computation> computation,
-        bool is_sharded = false)
-        : computation(std::move(computation)), is_sharded(is_sharded) {}
-
-    std::shared_ptr<xla::ComputationClient::Computation> computation;
-    bool is_sharded;
-  };
-
-  using ComputationCache =
-      xla::util::Cache<torch::lazy::hash_t, CachedComputation,
-                       torch::lazy::HashReducer>;
 
   struct Async {
     Async(SyncTensorCollection* coll,

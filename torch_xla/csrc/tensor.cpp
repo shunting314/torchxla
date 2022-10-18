@@ -1906,8 +1906,9 @@ c10::SymIntNode XLASymIntNodeImpl::floordiv(const c10::SymIntNode& other) {
 std::string XLASymIntNodeImpl::str() {
   return "Static bound: " +
          std::to_string(DimCast(node().get())->getStaticValue());
-
-torch::lazy::hash_t XLATensor::GetGraphHash(const std::vector<XLATensor>& tensors) {
+}
+  
+torch::lazy::hash_t XLATensor::GetGraphHash(const std::vector<XLATensorPtr>& tensors) {
   SyncTensorsConfig config;
   config.sync_xla_data = true;
 
