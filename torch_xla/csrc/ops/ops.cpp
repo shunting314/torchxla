@@ -68,38 +68,15 @@ namespace torch_xla {
                      std::move(lower_fn));                                     \
   }
 
-PTXLA_UNARY_OP(Tanh, at::aten::tanh, xla::Tanh);
 PTXLA_UNARY_OP(Neg, at::aten::neg, xla::Neg);
 PTXLA_UNARY_OP(Exp, at::aten::exp, xla::Exp);
-PTXLA_UNARY_OP(Expm1, at::aten::expm1, xla::Expm1);
 PTXLA_UNARY_OP(Log, at::aten::log, xla::Log);
 PTXLA_UNARY_OP(Log1p, at::aten::log1p, xla::Log1p);
-PTXLA_UNARY_OP(Erf, at::aten::erf, xla::Erf);
-PTXLA_UNARY_OP(Erfc, at::aten::erfc, xla::Erfc);
-PTXLA_UNARY_OP(Erfinv, at::aten::erfinv, xla::ErfInv);
 PTXLA_UNARY_OP(Sqrt, at::aten::sqrt, xla::Sqrt);
-PTXLA_UNARY_OP(Rsqrt, at::aten::rsqrt, xla::Rsqrt);
-PTXLA_UNARY_OP(Ceil, at::aten::ceil, xla::Ceil);
-PTXLA_UNARY_OP(Round, at::aten::round, xla::RoundToEven);
-PTXLA_UNARY_OP(Not, at::aten::bitwise_not, xla::Not);
-PTXLA_UNARY_OP(IsNan, at::aten::isnan, xla::IsNan);
 
 PTXLA_BINARY_OP(Min, at::aten::min, xla::Min);
 PTXLA_BINARY_OP(Pow, at::aten::pow, xla::Pow);
 PTXLA_BINARY_OP(Fmod, at::aten::fmod, xla::Rem);
-PTXLA_BINARY_OP(Atan2, at::aten::atan2, xla::Atan2);
-
-torch::lazy::NodePtr Trunc(const torch::lazy::Value& input) {
-  std::vector<torch::lazy::Shape> shapes;
-  return torch::lazy::MakeNode<Floor>(
-             torch::lazy::MakeNode<Abs>(input, std::move(shapes)),
-             std::vector<torch::lazy::Shape>()) *
-         torch::lazy::MakeNode<Sign>(input, std::vector<torch::lazy::Shape>());
-}
-
-torch::lazy::NodePtr FracOp(const torch::lazy::Value& input) {
-  return input - Trunc(input);
-}
 
 torch::lazy::NodePtr LogBase(const torch::lazy::Value& input,
                              torch::lazy::OpKind op, double base) {
@@ -136,26 +113,6 @@ torch::lazy::NodePtr SignOp(const torch::lazy::Value& input) {
                    GetXlaShape(input), std::move(lower_fn));
 }
 
-torch::lazy::NodePtr ReluOp(const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_output = BuildRelu(xla_input);
-    return node.ReturnOp(xla_output, loctx);
-  };
-  auto lower_for_shape_fn =
-      [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    XLA_CHECK_EQ(operands.size(), 1) << "Unexpected number of operands";
-    return BuildRelu(operands[0]);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::relu), {input},
-                   [&]() {
-                     return InferOutputShape({GetXlaShape(input)},
-                                             lower_for_shape_fn);
-                   },
-                   std::move(lower_fn));
-}
-
 torch::lazy::NodePtr Prelu(const torch::lazy::Value& input,
                            const torch::lazy::Value& weight) {
   auto lower_fn = [](const XlaNode& node,
@@ -170,54 +127,6 @@ torch::lazy::NodePtr Prelu(const torch::lazy::Value& input,
                    GetXlaShape(input), std::move(lower_fn));
 }
 
-torch::lazy::NodePtr HardSigmoid(const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(0));
-    return node.ReturnOp(BuildHardSigmoid(xla_input), loctx);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::hardsigmoid), {input},
-                   GetXlaShape(input), std::move(lower_fn));
-}
-
-torch::lazy::NodePtr HardSigmoidBackward(const torch::lazy::Value& grad_output,
-                                         const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_grad_output = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(1));
-    return node.ReturnOp(BuildHardSigmoidBackward(xla_grad_output, xla_input),
-                         loctx);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::hardsigmoid_backward),
-                   {grad_output, input}, GetXlaShape(input),
-                   std::move(lower_fn));
-}
-
-torch::lazy::NodePtr HardSwish(const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(0));
-    return node.ReturnOp(BuildHardSwish(xla_input), loctx);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::hardswish), {input},
-                   GetXlaShape(input), std::move(lower_fn));
-}
-
-torch::lazy::NodePtr HardSwishBackward(const torch::lazy::Value& grad_output,
-                                       const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_grad_output = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(1));
-    return node.ReturnOp(BuildHardSwishBackward(xla_grad_output, xla_input),
-                         loctx);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::hardswish_backward),
-                   {grad_output, input}, GetXlaShape(input),
-                   std::move(lower_fn));
-}
-
 torch::lazy::NodePtr LogSigmoid(const torch::lazy::Value& input) {
   auto lower_fn = [](const XlaNode& node,
                      LoweringContext* loctx) -> XlaOpVector {
@@ -226,22 +135,6 @@ torch::lazy::NodePtr LogSigmoid(const torch::lazy::Value& input) {
   };
   return GenericOp(torch::lazy::OpKind(at::aten::log_sigmoid), {input},
                    GetXlaShape(input), std::move(lower_fn), /*num_outputs=*/2);
-}
-
-torch::lazy::NodePtr LogSigmoidBackward(const torch::lazy::Value& grad_output,
-                                        const torch::lazy::Value& input,
-                                        const torch::lazy::Value& buffer) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_grad_output = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(1));
-    xla::XlaOp xla_buffer = loctx->GetOutputOp(node.operand(2));
-    return node.ReturnOp(
-        BuildLogSigmoidBackward(xla_grad_output, xla_input, xla_buffer), loctx);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::log_sigmoid_backward),
-                   {grad_output, input, buffer}, GetXlaShape(input),
-                   std::move(lower_fn));
 }
 
 torch::lazy::NodePtr SiLU(const torch::lazy::Value& input) {
@@ -287,7 +180,30 @@ torch::lazy::NodePtr Sigmoid(const torch::lazy::Value& input) {
 
 torch::lazy::NodePtr SigmoidBackward(const torch::lazy::Value& grad_output,
                                      const torch::lazy::Value& output) {
-  return grad_output * (ScalarOp(1, GetXlaShape(output)) - output) * output;
+  torch::lazy::Value scalar_1 = ScalarOp(1, GetXlaShape(output));
+  auto lower_fn = [](const XlaNode& node,
+                     LoweringContext* loctx) -> XlaOpVector {
+    xla::XlaOp grad_output = loctx->GetOutputOp(node.operand(0));
+    xla::XlaOp output = loctx->GetOutputOp(node.operand(1));
+    xla::XlaOp scalar_1 = loctx->GetOutputOp(node.operand(2));
+    xla::XlaOp ret = BuildSigmoidBackward(grad_output, output, scalar_1);
+    return node.ReturnOp(ret, loctx);
+  };
+  auto shape_fn = [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
+    xla::XlaOp grad_output = operands[0];
+    xla::XlaOp output = operands[1];
+    xla::XlaOp scalar_1 = operands[2];
+    xla::XlaOp ret = BuildSigmoidBackward(grad_output, output, scalar_1);
+    return ret;
+  };
+  return GenericOp(
+      torch::lazy::OpKind(at::aten::sigmoid), {grad_output, output, scalar_1},
+      [&]() {
+        return InferOutputShape({GetXlaShape(grad_output), GetXlaShape(output),
+                                 GetXlaShape(scalar_1)},
+                                shape_fn);
+      },
+      std::move(lower_fn));
 }
 
 torch::lazy::NodePtr LogSoftmaxBackwardOp(const torch::lazy::Value& grad_output,
@@ -336,27 +252,6 @@ torch::lazy::NodePtr Celu(const torch::lazy::Value& input,
   };
   return GenericOp(torch::lazy::OpKind(at::aten::celu), {input},
                    GetXlaShape(input), std::move(lower_fn));
-}
-
-torch::lazy::NodePtr Ger(const torch::lazy::Value& input,
-                         const torch::lazy::Value& other) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_other = loctx->GetOutputOp(node.operand(1));
-    return node.ReturnOp(BuildGer(xla_input, xla_other), loctx);
-  };
-  auto lower_for_shape_fn =
-      [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    return BuildGer(operands[0], operands[1]);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::ger), {input, other},
-                   [&]() {
-                     return InferOutputShape(
-                         {GetXlaShape(input), GetXlaShape(other)},
-                         lower_for_shape_fn);
-                   },
-                   std::move(lower_fn));
 }
 
 torch::lazy::NodePtr AddMatMulOp(const torch::lazy::Value& input,
@@ -446,58 +341,6 @@ torch::lazy::NodePtr AdaptiveMaxPool2dBackward(
                                           /*pool_dim=*/2);
   };
   return GenericOp(torch::lazy::OpKind(at::aten::adaptive_max_pool2d_backward),
-                   {grad_output, input},
-                   [&]() {
-                     return InferOutputShape(
-                         {GetXlaShape(grad_output), GetXlaShape(input)},
-                         lower_for_shape_fn);
-                   },
-                   std::move(lower_fn));
-}
-
-torch::lazy::NodePtr AdaptiveAvgPool3dBackward(
-    const torch::lazy::Value& grad_output, const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp grad_output = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp input = loctx->GetOutputOp(node.operand(1));
-    xla::XlaOp xla_output = BuildAdaptiveAvgPool3dBackward(
-        /*out_backprop=*/grad_output, /*input=*/input);
-    return node.ReturnOp(xla_output, loctx);
-  };
-  auto lower_for_shape_fn =
-      [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    XLA_CHECK_EQ(operands.size(), 2);
-    return BuildAdaptiveAvgPool3dBackward(/*out_backprop=*/operands[0],
-                                          /*input=*/operands[1]);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::adaptive_avg_pool3d_backward),
-                   {grad_output, input},
-                   [&]() {
-                     return InferOutputShape(
-                         {GetXlaShape(grad_output), GetXlaShape(input)},
-                         lower_for_shape_fn);
-                   },
-                   std::move(lower_fn));
-}
-
-torch::lazy::NodePtr AdaptiveAvgPool2dBackward(
-    const torch::lazy::Value& grad_output, const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp grad_output = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp input = loctx->GetOutputOp(node.operand(1));
-    xla::XlaOp xla_output = BuildAdaptiveAvgPool2dBackward(
-        /*out_backprop=*/grad_output, /*input=*/input);
-    return node.ReturnOp(xla_output, loctx);
-  };
-  auto lower_for_shape_fn =
-      [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    XLA_CHECK_EQ(operands.size(), 2);
-    return BuildAdaptiveAvgPool2dBackward(/*out_backprop=*/operands[0],
-                                          /*input=*/operands[1]);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::adaptive_avg_pool2d_backward),
                    {grad_output, input},
                    [&]() {
                      return InferOutputShape(
@@ -674,18 +517,15 @@ torch::lazy::NodePtr Norm(const torch::lazy::Value& input,
     //   tensor(3.1235)
     //   >>> print(x.abs().sum())
     //   tensor(11.9437)
-    return torch::lazy::MakeNode<Sum>(
-        torch::lazy::MakeNode<Abs>(input, std::vector<torch::lazy::Shape>()),
-        dimensions, keepdim, dtype);
+    return torch::lazy::MakeNode<Sum>(torch::lazy::MakeNode<Abs>(input),
+                                      dimensions, keepdim, dtype);
   }
   // Generic sum(x^p)^(1/p) norms.
   torch::lazy::NodePtr norm_exp =
       ScalarOp(norm_value, GetXlaShape(input).element_type());
   torch::lazy::NodePtr norm_exp_inv =
       ScalarOp(1.0 / norm_value, GetXlaShape(input).element_type());
-  torch::lazy::NodePtr exp =
-      Pow(torch::lazy::MakeNode<Abs>(input, std::vector<torch::lazy::Shape>()),
-          norm_exp);
+  torch::lazy::NodePtr exp = Pow(torch::lazy::MakeNode<Abs>(input), norm_exp);
   torch::lazy::NodePtr result =
       torch::lazy::MakeNode<Sum>(exp, dimensions, keepdim, dtype);
   return Pow(result, norm_exp_inv);
@@ -703,18 +543,6 @@ torch::lazy::NodePtr Identity(int64_t lines, int64_t cols,
                    xla::ShapeUtil::MakeShape(element_type, {lines, cols}),
                    std::move(lower_fn), /*num_outputs=*/1,
                    torch::lazy::MHash(lines, cols));
-}
-
-torch::lazy::NodePtr Elu(const torch::lazy::Value& input,
-                         const at::Scalar& alpha, const at::Scalar& scale,
-                         const at::Scalar& input_scale) {
-  auto lower_fn = [=](const XlaNode& node,
-                      LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(0));
-    return node.ReturnOp(BuildElu(xla_input, alpha, scale, input_scale), loctx);
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::elu), {input},
-                   GetXlaShape(input), std::move(lower_fn));
 }
 
 torch::lazy::NodePtr EluBackward(const torch::lazy::Value& grad_output,
@@ -785,16 +613,11 @@ torch::lazy::NodePtr Rshift(const torch::lazy::Value& input,
 torch::lazy::NodePtr Remainder(const torch::lazy::Value& input,
                                const torch::lazy::Value& divisor) {
   torch::lazy::ScopePusher ir_scope(at::aten::remainder.toQualString());
-  torch::lazy::NodePtr f = Fmod(
-      input,
-      torch::lazy::MakeNode<Abs>(divisor, std::vector<torch::lazy::Shape>()));
-  return f + divisor * ComparisonOp(
-                           at::aten::lt,
-                           torch::lazy::MakeNode<Sign>(
-                               f, std::vector<torch::lazy::Shape>()) *
-                               torch::lazy::MakeNode<Sign>(
-                                   divisor, std::vector<torch::lazy::Shape>()),
-                           ScalarOp(0, GetXlaShape(input)));
+  torch::lazy::NodePtr f = Fmod(input, torch::lazy::MakeNode<Abs>(divisor));
+  return f + divisor * ComparisonOp(at::aten::lt,
+                                    torch::lazy::MakeNode<Sign>(f) *
+                                        torch::lazy::MakeNode<Sign>(divisor),
+                                    ScalarOp(0, GetXlaShape(input)));
 }
 
 torch::lazy::NodePtr MaxUnary(const torch::lazy::Value& input) {
@@ -839,21 +662,6 @@ torch::lazy::NodePtr MinUnary(const torch::lazy::Value& input) {
       std::move(lower_fn));
 }
 
-torch::lazy::NodePtr Take(const torch::lazy::Value& input,
-                          const torch::lazy::Value& index) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_input = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_index = loctx->GetOutputOp(node.operand(1));
-    xla::XlaOp result = BuildTake(xla_input, xla_index);
-    return node.ReturnOp(result, loctx);
-  };
-  xla::Shape result_shape = GetXlaShape(index);
-  result_shape.set_element_type(GetXlaShape(input).element_type());
-  return GenericOp(torch::lazy::OpKind(at::aten::take), {input, index},
-                   std::move(result_shape), std::move(lower_fn));
-}
-
 torch::lazy::NodePtr TanhGelu(const torch::lazy::Value& input) {
   // TODO: add proper lowering function
   torch::lazy::ScopePusher ir_scope("aten::tanh_gelu");
@@ -867,7 +675,7 @@ torch::lazy::NodePtr TanhGelu(const torch::lazy::Value& input) {
   torch::lazy::NodePtr one = ScalarOp(1, shape);
   torch::lazy::NodePtr half = ScalarOp(0.5, shape);
   torch::lazy::NodePtr inner = beta * (input + kappa * Pow(input, three));
-  return half * input * (one + Tanh(inner));
+  return half * input * (one + torch::lazy::MakeNode<Tanh>(inner));
 }
 
 torch::lazy::NodePtr TanhGeluBackward(const torch::lazy::Value& grad,
@@ -883,7 +691,7 @@ torch::lazy::NodePtr TanhGeluBackward(const torch::lazy::Value& grad,
   torch::lazy::NodePtr three = ScalarOp(3, shape);
   torch::lazy::NodePtr half = ScalarOp(0.5, shape);
   torch::lazy::NodePtr inner = beta * (input + kappa * Pow(input, three));
-  torch::lazy::NodePtr tanh_inner = Tanh(inner);
+  torch::lazy::NodePtr tanh_inner = torch::lazy::MakeNode<Tanh>(inner);
 
   torch::lazy::NodePtr left = half * input;
   torch::lazy::NodePtr right = one + tanh_inner;
@@ -899,140 +707,11 @@ torch::lazy::NodePtr TanhGeluBackward(const torch::lazy::Value& grad,
   return grad * (left_derivative + right_derivative);
 }
 
-torch::lazy::NodePtr BaddBmm(const torch::lazy::Value& lhs,
-                             const torch::lazy::Value& rhs,
-                             const torch::lazy::Value& bias,
-                             const torch::lazy::Value& product_multiplier,
-                             const torch::lazy::Value& bias_multiplier) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp xla_lhs = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp xla_rhs = loctx->GetOutputOp(node.operand(1));
-    xla::XlaOp xla_bias = loctx->GetOutputOp(node.operand(2));
-    xla::XlaOp xla_product_multiplier = loctx->GetOutputOp(node.operand(3));
-    xla::XlaOp xla_bias_multiplier = loctx->GetOutputOp(node.operand(4));
-    std::tie(xla_lhs, xla_rhs) = XlaHelpers::PromoteValues(xla_lhs, xla_rhs);
-
-    return node.ReturnOp(
-        BuildMatMulWithMultiplier(xla_lhs, xla_rhs, xla_bias,
-                                  xla_product_multiplier, xla_bias_multiplier),
-        loctx);
-  };
-  auto lower_for_shape_fn =
-      [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    return BuildMatMulWithMultiplier(operands[0], operands[1], operands[2],
-                                     operands[3], operands[4]);
-  };
-  return GenericOp(
-      torch::lazy::OpKind(at::aten::baddbmm),
-      {lhs, rhs, bias, product_multiplier, bias_multiplier},
-      [&]() {
-        return InferOutputShape(
-            {GetXlaShape(lhs), GetXlaShape(rhs), GetXlaShape(bias),
-             GetXlaShape(product_multiplier), GetXlaShape(bias_multiplier)},
-            lower_for_shape_fn);
-      },
-      std::move(lower_fn));
-}
-
 torch::lazy::NodePtr Lerp(const torch::lazy::Value& start,
                           const torch::lazy::Value& end,
                           const torch::lazy::Value& weight) {
   torch::lazy::ScopePusher ir_scope(at::aten::lerp.toQualString());
   return start + weight * (end - start);
-}
-
-torch::lazy::NodePtr LogicalNot(const torch::lazy::Value& input) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp op = loctx->GetOutputOp(node.operand(0));
-    return node.ReturnOp(XlaHelpers::PromotedLogicalUnaryOp(
-                             op, [](xla::XlaOp lhs) { return xla::Not(lhs); }),
-                         loctx);
-  };
-  auto shape_fn = [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    return XlaHelpers::PromotedLogicalUnaryOp(
-        operands[0], [](xla::XlaOp lhs) { return xla::Not(lhs); });
-  };
-  return GenericOp(
-      torch::lazy::OpKind(at::aten::logical_not), {input},
-      [&]() { return InferOutputShape({GetXlaShape(input)}, shape_fn); },
-      std::move(lower_fn));
-}
-
-torch::lazy::NodePtr LogicalXor(const torch::lazy::Value& input,
-                                const torch::lazy::Value& other) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp op1 = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp op2 = loctx->GetOutputOp(node.operand(1));
-    return node.ReturnOp(
-        XlaHelpers::PromotedLogicalBinaryOp(
-            op1, op2,
-            [](xla::XlaOp lhs, xla::XlaOp rhs) { return xla::Xor(lhs, rhs); }),
-        loctx);
-  };
-  auto shape_fn = [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    return XlaHelpers::PromotedLogicalBinaryOp(
-        operands[0], operands[1],
-        [](xla::XlaOp lhs, xla::XlaOp rhs) { return xla::Xor(lhs, rhs); });
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::logical_xor), {input, other},
-                   [&]() {
-                     return InferOutputShape(
-                         {GetXlaShape(input), GetXlaShape(other)}, shape_fn);
-                   },
-                   std::move(lower_fn));
-}
-
-torch::lazy::NodePtr LogicalAnd(const torch::lazy::Value& input,
-                                const torch::lazy::Value& other) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp op1 = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp op2 = loctx->GetOutputOp(node.operand(1));
-    return node.ReturnOp(
-        XlaHelpers::PromotedLogicalBinaryOp(
-            op1, op2,
-            [](xla::XlaOp lhs, xla::XlaOp rhs) { return xla::And(lhs, rhs); }),
-        loctx);
-  };
-  auto shape_fn = [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    return XlaHelpers::PromotedLogicalBinaryOp(
-        operands[0], operands[1],
-        [](xla::XlaOp lhs, xla::XlaOp rhs) { return xla::And(lhs, rhs); });
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::logical_and), {input, other},
-                   [&]() {
-                     return InferOutputShape(
-                         {GetXlaShape(input), GetXlaShape(other)}, shape_fn);
-                   },
-                   std::move(lower_fn));
-}
-
-torch::lazy::NodePtr LogicalOr(const torch::lazy::Value& input,
-                               const torch::lazy::Value& other) {
-  auto lower_fn = [](const XlaNode& node,
-                     LoweringContext* loctx) -> XlaOpVector {
-    xla::XlaOp op1 = loctx->GetOutputOp(node.operand(0));
-    xla::XlaOp op2 = loctx->GetOutputOp(node.operand(1));
-    return node.ReturnOp(
-        XlaHelpers::PromotedLogicalBinaryOp(
-            op1, op2,
-            [](xla::XlaOp lhs, xla::XlaOp rhs) { return xla::Or(lhs, rhs); }),
-        loctx);
-  };
-  auto shape_fn = [](absl::Span<const xla::XlaOp> operands) -> xla::XlaOp {
-    return XlaHelpers::PromotedLogicalBinaryOp(
-        operands[0], operands[1],
-        [](xla::XlaOp lhs, xla::XlaOp rhs) { return xla::Or(lhs, rhs); });
-  };
-  return GenericOp(torch::lazy::OpKind(at::aten::logical_or), {input, other},
-                   [&]() {
-                     return InferOutputShape(
-                         {GetXlaShape(input), GetXlaShape(other)}, shape_fn);
-                   },
-                   std::move(lower_fn));
 }
 
 torch::lazy::NodePtr XLogY(const torch::lazy::Value& input,

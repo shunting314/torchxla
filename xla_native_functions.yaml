@@ -4,23 +4,96 @@ full_codegen:
   - acos
   - acosh
   - abs
+  - all
+  - all.dim
+  - addcdiv
+  - addcmul
+  - amax
+  - amin
+  - any
+  - any.dim
   - asin
   - asinh
   - atan
   - atanh
+  - binary_cross_entropy
+  - binary_cross_entropy_backward
+  - bitwise_not
+  - ceil
+  - cholesky
+  - clamp.Tensor
+  - clamp_max.Tensor
+  - clamp_min.Tensor
   - cos
   - cosh
+  - elu
+  - eq.Scalar
+  - eq.Tensor
+  - erf
+  - erfc
+  - erfinv
+  - exp
+  - expm1
   - floor
+  - frac
+  - ge.Scalar
+  - ge.Tensor
+  - gt.Scalar
+  - gt.Tensor
+  - hardshrink
+  - hardshrink_backward
+  - hardsigmoid
+  - hardsigmoid_backward
+  - hardswish
+  - hardswish_backward
   - inverse
+  - isnan
+  - leaky_relu
+  - le.Scalar
+  - le.Tensor
   - logdet
+  - logical_and
+  - logical_not
+  - logical_or
+  - logical_xor
+  - log_sigmoid_backward
+  - log_sigmoid_forward
+  - lt.Scalar
+  - lt.Tensor
   - maximum
   - minimum
+  - ne.Scalar
+  - ne.Tensor
   - reciprocal
+  - relu
+  - round
+  - rsqrt
+  - selu
   - sgn
   - sign
+  - silu
+  - silu_backward
   - sin
   - sinh
+  - softshrink
+  - softshrink_backward
+  - take
   - tan
+  - tanh
+  - tril
+  - triu
+  - trunc
+ir_gen:
+  - _adaptive_avg_pool2d
+  - _adaptive_avg_pool2d_backward
+  - _adaptive_avg_pool3d
+  - _adaptive_avg_pool3d_backward
+  - atan2
+  - baddbmm
+  - bitwise_and.Tensor
+  - bitwise_or.Tensor
+  - bitwise_xor.Tensor
+  - leaky_relu_backward
 supported:
   - __ilshift__.Scalar
   - __ilshift__.Tensor
@@ -52,17 +125,8 @@ supported:
   - adaptive_max_pool2d_backward
   - add.Scalar
   - add.Tensor
-  - addcdiv
-  - addcdiv_
-  - addcmul
   - addmm
   - alias
-  - all
-  - all.dim
-  - amax
-  - amin
-  - any
-  - any.dim
   - arange.start_out
   - argmax
   - argmin
@@ -75,30 +139,19 @@ supported:
   - avg_pool3d_backward
   - baddbmm
   - bernoulli
-  - bernoulli_.float
+  - bernoulli.p
   - bernoulli_.Tensor
-  - binary_cross_entropy
-  - binary_cross_entropy_backward
   - binary_cross_entropy_with_logits
-  - bitwise_and.Scalar
   - bitwise_and.Tensor
-  - bitwise_not
-  - bitwise_or.Scalar
   - bitwise_or.Tensor
-  - bitwise_xor.Scalar
   - bitwise_xor.Tensor
   - bmm
   - cat
-  - ceil
   - celu
   - celu_
-  - cholesky
   - clamp
-  - clamp.Tensor
   - clamp_max
-  - clamp_max.Tensor
   - clamp_min
-  - clamp_min.Tensor
   - clone
   - constant_pad_nd
   - convolution_backward_overrideable
@@ -112,44 +165,24 @@ supported:
   - div.Tensor
   - div.Tensor_mode
   - dot
-  - elu
-  - elu_
   - elu_backward
   - embedding
   - embedding_dense_backward
   - empty.memory_format
   - empty_strided
-  - eq.Scalar
-  - eq.Tensor
-  - erf
-  - erfc
-  - erfinv
-  - exp
   - expand
-  - expm1
   - exponential_
   - eye.m_out
   - eye.out
   - fill_.Scalar
   - fill_.Tensor
   - flip
+  - floor_divide
   - fmod.Scalar
   - fmod.Tensor
-  - frac
   - gather
-  - ge.Scalar
-  - ge.Tensor
   - gelu
   - gelu_backward
-  - ger
-  - gt.Scalar
-  - gt.Tensor
-  - hardshrink
-  - hardshrink_backward
-  - hardsigmoid
-  - hardsigmoid_backward
-  - hardswish
-  - hardswish_backward
   - hardtanh
   - hardtanh_backward
   - index.Tensor
@@ -159,13 +192,8 @@ supported:
   - index_fill_.int_Tensor
   - index_put_
   - index_select
-  - isnan
   - kl_div
-  - kl_div_backward
   - kthvalue
-  - le.Scalar
-  - le.Tensor
-  - leaky_relu
   - leaky_relu_backward
   - lerp.Scalar
   - lerp.Tensor
@@ -174,15 +202,7 @@ supported:
   - log1p
   - log2
   - log10
-  - log_sigmoid_backward
-  - log_sigmoid_forward
-  - logical_and
-  - logical_not
-  - logical_or
-  - logical_xor
   - logsumexp
-  - lt.Scalar
-  - lt.Tensor
   - masked_fill_.Scalar
   - masked_fill_.Tensor
   - masked_scatter_
@@ -212,8 +232,6 @@ supported:
   - nan_to_num
   - native_batch_norm
   - native_batch_norm_backward
-  - ne.Scalar
-  - ne.Tensor
   - neg
   - nll_loss2d_backward
   - nll_loss2d_forward
@@ -242,8 +260,6 @@ supported:
   - random_.to
   - reflection_pad2d
   - reflection_pad2d_backward
-  - relu
-  - relu_
   - remainder.Scalar
   - remainder.Tensor
   - repeat
@@ -253,10 +269,8 @@ supported:
   - replication_pad2d_backward
   - resize_
   - roll
-  - round
   - rrelu_with_noise
   - rrelu_with_noise_backward
-  - rsqrt
   - rsub.Scalar
   - rsub.Tensor
   - scatter.reduce
@@ -265,20 +279,15 @@ supported:
   - scatter.value_reduce
   - scatter_add
   - select.int
-  - selu
   - selu_
   - sigmoid
   - sigmoid_backward
-  - silu
-  - silu_backward
   - slice.Tensor
   - slogdet
   - smooth_l1_loss
   - smooth_l1_loss_backward
   - softplus
   - softplus_backward
-  - softshrink
-  - softshrink_backward
   - sort
   - sort.stable
   - split.Tensor
@@ -301,8 +310,6 @@ supported:
   - symeig
   - t
   - t_
-  - take
-  - tanh
   - tanh_backward
   - threshold
   - threshold_backward
@@ -311,11 +318,6 @@ supported:
   - transpose.int
   - transpose_
   - triangular_solve
-  - tril
-  - tril_
-  - triu
-  - triu_
-  - trunc
   - unbind.int
   - uniform_
   - unsqueeze
@@ -323,15 +325,15 @@ supported:
   - upsample_bilinear2d
   - upsample_bilinear2d_backward
   - upsample_nearest2d
-  - upsample_nearest2d.vec
   - upsample_nearest2d_backward
-  - upsample_nearest2d_backward.vec
   - var.correction
   - var_mean.correction
   - view
   - where.self
   - xlogy.Tensor
   - zero_
+  - _native_batch_norm_legit
+  - _native_batch_norm_legit.no_stats
   # Below are all operators that are "composite" in core,
   # but require us to explicitly re-enable functionalization in order to use them.
   # Why? These operators are all CompositeExplicitAutograd, which mean that they run
@@ -345,12 +347,23 @@ supported:
   - pixel_shuffle
   - pixel_unshuffle
   - select_backward
-  - linalg_inv_ex
   - linalg_pinv.atol_rtol_tensor
+  - _cdist_forward
   # The same applies to these ops, but we already have direct lowerings for them
   # - _trilinear
   # - logsumexp.out
+symint:
+  - embedding
+  - empty.memory_format
+  - empty_strided
+  - expand
+  - new_empty_strided
+  - view
+  - diagonal_backward
+  - narrow_copy
+  - select_backward
 autograd:
+  - einsum
   - max_pool2d
   - max_pool3d
   - native_layer_norm

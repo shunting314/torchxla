@@ -16,6 +16,7 @@
 #include "tensorflow/compiler/xla/xla_client/debug_macros.h"
 #include "tensorflow/compiler/xla/xla_client/util.h"
 #include "tensorflow/core/lib/bfloat16/bfloat16.h"
+#include "torch/csrc/lazy/core/shape.h"
 #include "torch/csrc/lazy/core/util.h"
 
 namespace torch_xla {
@@ -239,6 +240,10 @@ class XlaHelpers {
   static xla::PrimitiveType PromoteType(xla::PrimitiveType type1,
                                         xla::PrimitiveType type2);
 
+  static xla::PrimitiveType PromoteType(xla::PrimitiveType type1,
+                                        xla::PrimitiveType type2,
+                                        xla::PrimitiveType type3);
+
   // Performs type promotion to make sure both operations return the same type.
   static std::pair<xla::XlaOp, xla::XlaOp> PromoteValues(xla::XlaOp op1,
                                                          xla::XlaOp op2);
@@ -329,6 +334,13 @@ class XlaHelpers {
   static void set_mat_mul_precision(xla::PrecisionConfig::Precision precision) {
     s_mat_mul_precision = precision;
   }
+
+  static xla::StatusOr<xla::XlaComputation> WrapXlaComputation(
+      const xla::XlaComputation& computation,
+      const std::vector<xla::Shape>& parameter_shapes,
+      std::vector<std::pair<int64_t, int64_t>> input_output_alias_pair);
+
+  static torch::lazy::Shape ConvertXlaShapeToLazy(const xla::Shape& shape);
 
  private:
   static xla::PrecisionConfig::Precision s_mat_mul_precision;

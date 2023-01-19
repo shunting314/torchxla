@@ -37,7 +37,7 @@ struct DataAsync {
 
 void TransferToServerAsync(std::shared_ptr<DataAsync> async,
                            const std::vector<std::string>& devices) {
-  XLA_TIMED("TransferToServerAsync");
+  TORCH_LAZY_TIMED("TransferToServerAsync");
 
   std::vector<xla::ComputationClient::DataPtr> async_xla_datas =
       xla::ComputationClient::Get()->CreateAsyncDatas(async->source_tensors);
@@ -652,7 +652,17 @@ void PopulateTensorBuffer(const at::Tensor& tensor,
 torch::lazy::BackendDataPtr TensorToXlaData(
     const at::Tensor& tensor, const xla::Shape& shape,
     const torch::lazy::BackendDevice& device) {
-  XLA_TIMED("TensorToData");
+  TORCH_LAZY_TIMED("TensorToData");
+  if (device.type() == (int8_t)XlaDeviceType::SPMD) {
+    // When SPMD is enabled, we want to delay the data transfer for XLA
+    // tensors until the data is sharded. So, we skip the data transfer
+    // here and simply return a placeholder for the backend data ptr.
+    // Data will only be transferred via CreateTensorsData, when users
+    // call the mark_sharding API.
+    return WrapXlaData(
+        xla::ComputationClient::Get()->CreateDataPlaceholder("SPMD:0", shape));
+  }
+
   static const bool transfer_async =
       xla::sys_util::GetEnvBool("XLA_TRANSFER_SCALAR_ASYNC", false);
   if (transfer_async && tensor.dim() == 0 && tensor.numel() == 1) {
@@ -753,13 +763,13 @@ at::Tensor XlaLiteralToTensorHelper(const xla::Literal& literal,
 
 xla::ComputationClient::DataPtr UnwrapXlaData(
     const torch::lazy::BackendDataPtr& data) {
-  XLA_TIMED("UnwrapXlaData");
+  TORCH_LAZY_TIMED("UnwrapXlaData");
   return dynamic_cast<XLAData*>(data.get())->xla_data();
 }
 
 std::vector<xla::ComputationClient::DataPtr> UnwrapXlaData(
     absl::Span<const torch::lazy::BackendDataPtr> datas) {
-  XLA_TIMED("UnwrapXlaData");
+  TORCH_LAZY_TIMED("UnwrapXlaData");
   std::vector<xla::ComputationClient::DataPtr> xla_datas;
   xla_datas.reserve(datas.size());
   for (const auto& data : datas) {
@@ -770,13 +780,13 @@ std::vector<xla::ComputationClient::DataPtr> UnwrapXlaData(
 
 torch::lazy::BackendDataPtr WrapXlaData(
     const xla::ComputationClient::DataPtr& xla_data) {
-  XLA_TIMED("WrapXlaData");
+  TORCH_LAZY_TIMED("WrapXlaData");
   return std::make_shared<XLAData>(xla_data);
 }
 
 std::vector<torch::lazy::BackendDataPtr> WrapXlaData(
     absl::Span<const xla::ComputationClient::DataPtr> xla_datas) {
-  XLA_TIMED("WrapXlaData");
+  TORCH_LAZY_TIMED("WrapXlaData");
   std::vector<torch::lazy::BackendDataPtr> datas;
   datas.reserve(xla_datas.size());
   for (const auto& xla_data : xla_datas) {
@@ -858,7 +868,7 @@ torch::lazy::BackendDataPtr TensorToXlaData(
 std::vector<torch::lazy::BackendDataPtr> CreateTensorsData(
     const std::vector<at::Tensor>& tensors,
     const std::vector<std::string>& devices, bool transfer_async) {
-  XLA_TIMED("TensorToData");
+  TORCH_LAZY_TIMED("TensorToData");
   XLA_CHECK_EQ(tensors.size(), devices.size());
   if (transfer_async) {
     std::shared_ptr<DataAsync> async = std::make_shared<DataAsync>();
@@ -902,6 +912,76 @@ std::vector<torch::lazy::BackendDataPtr> CreateTensorsData(
     return WrapXlaData(
         xla::ComputationClient::Get()->TransferToServer(source_tensors));
   }
+}
+
+std::vector<torch::lazy::BackendDataPtr> CreateTensorsData(
+    const std::vector<at::Tensor>& tensors,
+    const std::vector<XLATensor::ShardingSpecPtr>& shardings,
+    const std::vector<std::string>& devices) {
+  TORCH_LAZY_TIMED("TensorToData");
+  XLA_CHECK_EQ(tensors.size(), shardings.size());
+  XLA_CHECK_EQ(tensors.size(), devices.size());
+
+  std::vector<xla::ComputationClient::DataPtr> handles;
+  for (size_t i = 0; i < tensors.size(); ++i) {
+    torch::lazy::BackendDevice device = ParseDeviceString(devices[i]);
+    xla::Shape shape = CreateComputationShapeFromTensor(tensors[i], &device);
+
+    std::vector<xla::ComputationClient::TensorSource> source_tensors;  // in
+    std::vector<xla::ComputationClient::DataPtr> new_handles;          // out
+    if (shardings[i] != nullptr) {
+      xla::OpSharding sharding = shardings[i]->sharding;
+      // TODO(yeounoh) PJRT runs a process per host for SPMD and without cross
+      // host communications. This means that we may need to manually shard
+      // across global devices for multi-host training.
+      std::vector<std::string> local_devices =
+          xla::ComputationClient::Get()->GetAllDevices();
+      // Shards the input tensors with padding, to split evenly.
+      // The execution requires consistent shard sizes, and the zero-padded
+      // values should be ignored.
+      std::vector<at::Tensor> shards = ShardingUtil::ShardTensor(
+          tensors[i], sharding, local_devices, /*padded=*/true);
+
+      for (int64_t j = 0; j < shards.size(); ++j) {
+        int64_t ordinal = (sharding.type() == xla::OpSharding::OTHER)
+                              ? sharding.tile_assignment_devices()[j]
+                              : j;
+        auto shard_device = ParseDeviceString(local_devices[ordinal]);
+        auto shard_shape =
+            CreateComputationShapeFromTensor(shards[j], &shard_device);
+        auto populate_fn =
+            [&, j, shard_device](
+                const xla::ComputationClient::TensorSource& source_tensor,
+                void* dest_buffer, size_t dest_buffer_size) {
+              PopulateTensorBuffer(shards[j], source_tensor.shape, dest_buffer,
+                                   dest_buffer_size, shard_device);
+            };
+        source_tensors.emplace_back(std::move(shard_shape),
+                                    shard_device.toString(),
+                                    std::move(populate_fn));
+      }
+      new_handles.push_back(
+          xla::ComputationClient::Get()->TransferShardsToServer(
+              source_tensors, devices[i], shape));
+    } else {
+      // If data is not explicilty marked for sharding, then it is replicated to
+      // the rest of the available devices. This implicit replication is needed
+      // for XLA SPMD execution.
+      auto populate_fn =
+          [&, i, device](
+              const xla::ComputationClient::TensorSource& source_tensor,
+              void* dest_buffer, size_t dest_buffer_size) {
+            PopulateTensorBuffer(tensors[i], source_tensor.shape, dest_buffer,
+                                 dest_buffer_size, device);
+          };
+      source_tensors.emplace_back(std::move(shape), devices[i],
+                                  std::move(populate_fn));
+      new_handles =
+          xla::ComputationClient::Get()->TransferToServer(source_tensors);
+    }
+    handles.insert(handles.end(), new_handles.begin(), new_handles.end());
+  }
+  return WrapXlaData(handles);
 }
 
 xla::Literal GetTensorLiteral(const at::Tensor& tensor, const xla::Shape* shape,
@@ -1172,10 +1252,10 @@ bool RequiresRawTypeCasting(at::ScalarType scalar_type,
 
 xla::PrimitiveType GetShapeDimensionType(
     const torch::lazy::BackendDevice* device) {
-  torch::lazy::BackendDevice xla_device = GetDeviceOrCurrent(device);
-  XlaDeviceType hw_type = static_cast<XlaDeviceType>(xla_device.type());
-  return hw_type == XlaDeviceType::CPU ? xla::PrimitiveType::S64
-                                       : xla::PrimitiveType::S32;
+  // The shape dimension type is always s32 on TPU or CPU.
+  // In case in the future the type start depending on the underlying
+  // hardware, we leave the `device` in the function argument.
+  return xla::PrimitiveType::S32;
 }
 
 }  // namespace torch_xla

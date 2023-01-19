@@ -192,7 +192,6 @@ allowed_opinfo = set(
             AllowedOpInfoEntry('angle'),
             AllowedOpInfoEntry('linalg.solve'),
             AllowedOpInfoEntry('linalg.matrix_rank'),
-            AllowedOpInfoEntry('einsum'),
             AllowedOpInfoEntry('linalg.svd'),
             AllowedOpInfoEntry('linalg.svdvals'),
             AllowedOpInfoEntry('polar'),
@@ -234,12 +233,12 @@ allowed_opinfo = set(
             AllowedOpInfoEntry('special.entr'),
             AllowedOpInfoEntry('special.ndtri'),
             AllowedOpInfoEntry('lgamma'),
-            AllowedOpInfoEntry('logdet'),
             AllowedOpInfoEntry('log_softmax'),
             AllowedOpInfoEntry('logit'),
             AllowedOpInfoEntry('where'),
             AllowedOpInfoEntry('norm', 'fro'),
             AllowedOpInfoEntry('special.erfcx'),
+            AllowedOpInfoEntry('_native_batch_norm_legit'),
 
             # Duplicate Redundant entries for this test.
             # AllowedOpInfoEntry('polygamma', 'polygamma_n_1'),
@@ -251,6 +250,7 @@ allowed_opinfo = set(
 
             # Failing Ops
             # Refer for more info : https://github.com/pytorch/xla/pull/3019#issuecomment-877132385
+            # AllowedOpInfoEntry('einsum'), https://github.com/pytorch/xla/issues/4052
             # AllowedOpInfoEntry('cdist'),  // precision issue on TPU
             # AllowedOpInfoEntry('linalg.multi_dot'),  // failing on CPU
             # AllowedOpInfoEntry('matmul'),            // failing on CPU
@@ -339,6 +339,7 @@ allowed_opinfo = set(
             # AllowedOpInfoEntry('erfinv'),
             # AllowedOpInfoEntry('norm'),
             # AllowedOpInfoEntry('t'),
+            # AllowedOpInfoEntry('logdet'), xla::lodget does not handle empty input
 
             # Failed on CUDA CI only (investigate)
             # app.circleci.com/pipelines/github/pytorch/xla/9088/workflows/2d59c649-db2b-4384-921e-5e43eba1b51a/jobs/17875
@@ -387,6 +388,10 @@ class TestOpInfo(TestCase):
         elif isinstance(x, (numbers.Number, bool, str)):
           return x
 
+        # Passthrough None because some functions wrapped with type promotion
+        # wrapper might have optional args
+        if x is None:
+          return None
         raise ValueError("Unknown type {0}!".format(type(x)))
 
       cpu_sample_input, cpu_args, cpu_kwargs = to_cpu(sample.input), to_cpu(

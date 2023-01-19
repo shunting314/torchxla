@@ -21,7 +21,7 @@ os.environ[xenv.ORDINAL] = '0'
 
 
 def get_process_group_xla(rank, size):
-  pg_xla_creator = dist.Backend._plugins[dist.Backend.XLA]
+  pg_xla_creator = dist.Backend._plugins[dist.Backend.XLA].creator_fn
   pg_xla = pg_xla_creator(
       prefix_store=None, rank=rank, size=size, timeout=timedelta(minutes=1))
   return pg_xla
@@ -155,12 +155,19 @@ class XlaBackendTest(unittest.TestCase):
     opts = dist.BroadcastOptions()
     opts.rootRank = 0
     opts.rootTensor = 0
+
+    # Sync value of `tensor` to remove constants 1 and 0 from graph
+    xm.mark_step()
+
     # xla doesn't have broadcast. We use all_reduce to implement broadcast.
     all_reduce_pattern = r'%all\-reduce\.\d+ = .+ all\-reduce\('
     with xm_cc_op_intercepted('all_reduce'):
       pg_xla.broadcast([tensor], opts)
     hlo = torch_xla._XLAC._get_xla_tensors_hlo([tensor])
     hlo_matches(hlo, all_reduce_pattern)
+
+    assert 'constant' not in hlo, hlo
+
     # purge all computations attached the device.
     xm.mark_step()
 

@@ -51,10 +51,10 @@ static inline void AllClose(at::Tensor tensor, at::Tensor xla_tensor,
   EXPECT_TRUE(CloseValues(tensor, xla_tensor, rtol, atol));
 }
 
-static inline void AllClose(at::Tensor tensor, XLATensor& xla_tensor,
+static inline void AllClose(at::Tensor tensor, XLATensorPtr& xla_tensor,
                             double rtol = 1e-5, double atol = 1e-8) {
-  EXPECT_TRUE(
-      CloseValues(tensor, xla_tensor.ToTensor(/*detached=*/false), rtol, atol));
+  EXPECT_TRUE(CloseValues(tensor, xla_tensor->ToTensor(/*detached=*/false),
+                          rtol, atol));
 }
 
 static inline void AllEqual(at::Tensor tensor, at::Tensor xla_tensor) {
@@ -109,6 +109,9 @@ void TestBackward(
     const std::function<torch::Tensor(const std::vector<torch::Tensor>&)>&
         testfn,
     double rtol = 1e-5, double atol = 1e-8, int derivative_level = 1);
+
+torch::lazy::NodePtr CreateNonZeroNode2d(int64_t num_non_zero_element,
+                                         int64_t num_row, int64_t num_col);
 
 }  // namespace cpp_test
 }  // namespace torch_xla

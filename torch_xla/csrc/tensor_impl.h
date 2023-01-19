@@ -8,15 +8,26 @@
 
 namespace torch_xla {
 
+// [Note: Re-using upstream TensorImpl] As part of the LTC migration effort,
+// we tried to re-use the upstream LTCTensorImpl
+// (torch/csrc/lazy/core/tensor_impl.h) instead of having our own version of
+// XLATensorImpl. However, LTCTensorImpl defines its own set of hard-coded
+// dispatch keys in its constructor and has functions that call this
+// constructor. In addition, updating XLATensorImpl to extend LTCTensorImpl does
+// not produce much benefit since that wouldn't remove much duplicate code. As a
+// result, we decided to keep and use XLATensorImpl.
+
 // Tensor implementation class used to be fed to the at::Tensor.
 // Its scope is just to handle an XLATensor.
 class XLATensorImpl : public c10::TensorImpl {
  public:
-  explicit XLATensorImpl(XLATensor tensor);
+  explicit XLATensorImpl(XLATensor&& tensor);
+  explicit XLATensorImpl(XLATensor& tensor);
+  explicit XLATensorImpl(XLATensorPtr tensor);
 
-  XLATensor& tensor() { return tensor_; }
+  XLATensorPtr& tensor() { return tensor_; }
 
-  void set_tensor(XLATensor xla_tensor);
+  void set_tensor(XLATensorPtr xla_tensor);
 
   void force_refresh_sizes() { generation_ = 0; }
 
@@ -32,6 +43,7 @@ class XLATensorImpl : public c10::TensorImpl {
 
   at::IntArrayRef sizes_custom() const override;
   c10::SymIntArrayRef sym_sizes_custom() const override;
+  c10::SymInt sym_numel_custom() const override;
   at::IntArrayRef strides_custom() const override;
 
   int64_t dim_custom() const override;
@@ -48,10 +60,12 @@ class XLATensorImpl : public c10::TensorImpl {
 
  private:
   void SetupSizeProperties();
+  void SetupSymSizeProperties();
 
   static caffe2::TypeMeta GetTypeMeta(const XLATensor& tensor);
 
-  XLATensor tensor_;
+  XLATensorPtr tensor_;
+  std::vector<c10::SymInt> sym_sizes_;
   size_t generation_ = 0;
 };
 

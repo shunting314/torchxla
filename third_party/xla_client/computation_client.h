@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/types/optional.h"
 #include "absl/types/span.h"
 #include "tensorflow/compiler/xla/client/xla_computation.h"
@@ -20,14 +21,18 @@
 
 namespace xla {
 
+// Somehow the compiler doesn't allow type that has default member being
+// used as a default parameter in a method defined in the same scope.
+// Therefore, ClientExecuteOptions is defined here instead of within
+// ComputationClient.
+struct ClientExecuteOptions {
+  bool explode_tuple{true};
+};
+
 class ComputationClient {
  public:
   class Data {
    public:
-    struct Info {
-      virtual ~Info() {}
-    };
-
     using OpaqueHandle = int64_t;
 
     Data(std::string device, Shape shape)
@@ -39,13 +44,6 @@ class ComputationClient {
 
     const Shape& shape() const { return shape_; }
 
-    Info* info() const { return info_.get(); }
-
-    std::shared_ptr<Info> SetInfo(std::shared_ptr<Info> info) {
-      std::swap(info, info_);
-      return info;
-    }
-
     virtual OpaqueHandle GetOpaqueHandle() = 0;
 
     virtual void Assign(const Data& data) = 0;
@@ -55,7 +53,6 @@ class ComputationClient {
    private:
     std::string device_;
     Shape shape_;
-    std::shared_ptr<Info> info_;
   };
 
   using DataPtr = std::shared_ptr<Data>;
@@ -70,6 +67,11 @@ class ComputationClient {
 
     Computation(XlaComputation computation)
         : computation_(std::move(computation)) {
+      program_shape_ = ConsumeValue(computation_.GetProgramShape());
+    }
+
+    Computation(XlaComputation computation, std::vector<std::string> devices)
+        : computation_(std::move(computation)), devices_(std::move(devices)) {
       program_shape_ = ConsumeValue(computation_.GetProgramShape());
     }
 
@@ -129,27 +131,29 @@ class ComputationClient {
   struct CompileInstance {
     CompileInstance() = default;
     CompileInstance(XlaComputation computation, std::string compilation_device,
-                    std::vector<std::string> devices, const Shape* output_shape)
+                    std::vector<std::string> devices, const Shape* output_shape,
+                    bool parameter_is_tupled_arguments = false,
+                    bool is_sharded = false)
         : computation(std::move(computation)),
           compilation_device(std::move(compilation_device)),
           devices(std::move(devices)),
-          output_shape(output_shape) {}
+          output_shape(output_shape),
+          parameter_is_tupled_arguments(parameter_is_tupled_arguments),
+          is_sharded(is_sharded) {}
 
     XlaComputation computation;
     std::string compilation_device;
     std::vector<std::string> devices;
     const Shape* output_shape = nullptr;
+    bool parameter_is_tupled_arguments;
+    bool is_sharded;
   };
 
-  struct ExecuteOptions {
-    bool explode_tuple = true;
-  };
+  struct ExecuteComputationOptions : public ClientExecuteOptions {};
 
-  struct ExecuteComputationOptions : public ExecuteOptions {};
+  struct ExecuteReplicatedOptions : public ClientExecuteOptions {};
 
-  struct ExecuteReplicatedOptions : public ExecuteOptions {};
-
-  struct ExecuteParallelOptions : public ExecuteOptions {};
+  struct ExecuteParallelOptions : public ClientExecuteOptions {};
 
   // Describes an operation to be fed to the ExecuteChained() API.
   // If the device_data member is not nullptr, this operation is a device data
@@ -200,15 +204,29 @@ class ComputationClient {
   virtual std::vector<xla::util::ExceptionCleanup> LockAsyncDatas(
       absl::Span<const DataPtr> datas) = 0;
 
-  // Transfers local tensor values to the TPU servers and fetches the handles.
+  // Returns data shards. We expect this to be called on PjRtShardedData to
+  // retrieve the shards. If other data type is passed, it returns the input
+  // wrapped inside a vector.
+  virtual std::vector<DataPtr> GetDataShards(DataPtr data) = 0;
+
+  // Transfers local tensor values to the TPU devices and fetches the handles.
   virtual std::vector<DataPtr> TransferToServer(
       absl::Span<const TensorSource> tensors) = 0;
 
-  // Transfers local tensor values to the TPU servers and fetches the handles.
+  // Transfers local tensor values to the TPU devices and fetches the handles.
   // Update the handles associated with DataPtrs passed instead of creating new
   // datas.
   virtual void TransferToServer(absl::Span<const TensorSource> tensors,
                                 absl::Span<const DataPtr> datas) = 0;
+
+  // Transfers local sharded tensor values to the TPU devices and returns a
+  // `PjRtShardedData`.
+  virtual DataPtr TransferShardsToServer(
+      absl::Span<const TensorSource> tensor_shards, std::string device,
+      xla::Shape shape) = 0;
+
+  // Copies `data->buffer` to `dst` device buffer.
+  virtual DataPtr CopyToDevice(DataPtr data, std::string dst) = 0;
 
   // Reads the tensor literal values stored at TPU server sites, behind the
   // supplied handles.
@@ -225,7 +243,9 @@ class ComputationClient {
   // its single elements.
   virtual std::vector<DataPtr> ExecuteComputation(
       const Computation& computation, absl::Span<const DataPtr> arguments,
-      const std::string& device, const ExecuteComputationOptions& options) = 0;
+      const std::string& device,
+      const ExecuteComputationOptions& options =
+          ExecuteComputationOptions{}) = 0;
 
   // Executes the computation in replicated mode.
   // The size of the arguments vector is the number of replicas to execute,
@@ -281,6 +301,17 @@ class ComputationClient {
   virtual std::vector<std::string> GetLocalDevices() const = 0;
 
   virtual std::vector<std::string> GetAllDevices() const = 0;
+
+  virtual int GetProcessIndex() const = 0;
+
+  virtual int GetNumProcesses() const = 0;
+
+  using DeviceAttribute =
+      std::variant<std::string, int64_t, std::vector<int64_t>, float>;
+
+  virtual const absl::flat_hash_map<std::string,
+                                    xla::ComputationClient::DeviceAttribute>&
+  GetDeviceAttributes(const std::string& device) = 0;
 
   virtual void SetReplicationDevices(
       std::shared_ptr<std::vector<std::string>> devices) = 0;

@@ -6,11 +6,15 @@
 
 #include "tensorflow/compiler/xla/xla_client/computation_client.h"
 #include "tensorflow/compiler/xla/xla_client/debug_macros.h"
+#include "torch/csrc/lazy/backend/backend_interface.h"
+#include "torch/csrc/lazy/core/tensor.h"
 #include "torch/csrc/lazy/core/tensor_util.h"
 #include "torch/csrc/lazy/core/util.h"
 #include "torch_xla/csrc/aten_xla_bridge.h"
 #include "torch_xla/csrc/device.h"
+#include "torch_xla/csrc/ir_builder.h"
 #include "torch_xla/csrc/layout_manager.h"
+#include "torch_xla/csrc/ops/dynamic_ir.h"
 #include "torch_xla/csrc/tensor_util.h"
 
 namespace torch_xla {
@@ -52,18 +56,24 @@ C10_REGISTER_GUARD_IMPL(XLA, XLAGuardImpl);
 
 }  // namespace
 
-XLATensorImpl::XLATensorImpl(XLATensor tensor)
+XLATensorImpl::XLATensorImpl(XLATensor&& tensor)
     : c10::TensorImpl(c10::DispatchKeySet{c10::DispatchKey::XLA,
                                           c10::DispatchKey::AutogradXLA},
                       GetTypeMeta(tensor),
                       bridge::XlaDeviceToAtenDevice(tensor.GetDevice())),
-      tensor_(std::move(tensor)) {
+      tensor_(c10::make_intrusive<XLATensor>(std::move(tensor))) {
   is_non_overlapping_and_dense_ = false;
-  set_sizes_strides_policy(SizesStridesPolicy::CustomSizes);
+  set_custom_sizes_strides(SizesStridesPolicy::CustomSizes);
 }
 
-void XLATensorImpl::set_tensor(XLATensor xla_tensor) {
-  tensor_ = std::move(xla_tensor);
+XLATensorImpl::XLATensorImpl(XLATensor& tensor)
+    : XLATensorImpl(XLATensor(tensor)) {}
+
+XLATensorImpl::XLATensorImpl(XLATensorPtr tensor)
+    : XLATensorImpl(XLATensor(*tensor)) {}
+
+void XLATensorImpl::set_tensor(XLATensorPtr xla_tensor) {
+  tensor_ = c10::make_intrusive<XLATensor>(std::move(*xla_tensor));
   generation_ = 0;
 }
 
@@ -99,7 +109,7 @@ void XLATensorImpl::shallow_copy_from(
       /*dest_impl=*/this,
       /*version_counter=*/version_counter(),
       /*allow_tensor_metadata_change=*/allow_tensor_metadata_change());
-  xla_impl->tensor_.ShallowCopyTo(&tensor_);
+  xla_impl->tensor_->ShallowCopyTo(tensor_);
   generation_ = 0;
 }
 
@@ -109,9 +119,18 @@ at::IntArrayRef XLATensorImpl::sizes_custom() const {
 }
 
 c10::SymIntArrayRef XLATensorImpl::sym_sizes_custom() const {
-  auto sizes = sizes_custom();
-  return c10::SymIntArrayRef(reinterpret_cast<const c10::SymInt*>(sizes.data()),
-                             sizes.size());
+  // N.B. SetupSizeProperties also updates sym_sizes_
+  const_cast<XLATensorImpl*>(this)->SetupSizeProperties();
+  return c10::SymIntArrayRef(sym_sizes_.data(), sym_sizes_.size());
+}
+
+c10::SymInt XLATensorImpl::sym_numel_custom() const {
+  auto sym_sizes = sym_sizes_custom();
+  c10::SymInt prod{1};
+  for (auto s : sym_sizes) {
+    prod *= s;
+  }
+  return prod;
 }
 
 at::IntArrayRef XLATensorImpl::strides_custom() const {
@@ -136,11 +155,11 @@ bool XLATensorImpl::is_contiguous_custom(at::MemoryFormat memory_format) const {
 }
 
 void XLATensorImpl::SetupSizeProperties() {
-  size_t generation = tensor_.generation();
+  size_t generation = tensor_->generation();
   if (generation != generation_) {
     // Fill up the basic dimension data members which the base class
     // implementation uses in its APIs.
-    auto shape = tensor_.shape();
+    auto shape = tensor_->shape();
     c10::SmallVector<int64_t, 5> updated_sizes;
     numel_ = 1;
     for (auto dim : shape.get().dimensions()) {
@@ -153,8 +172,29 @@ void XLATensorImpl::SetupSizeProperties() {
     for (int i = 0; i < updated_strides.size(); i++) {
       sizes_and_strides_.stride_at_unchecked(i) = updated_strides[i];
     }
+    SetupSymSizeProperties();
     generation_ = generation;
   }
+}
+
+void XLATensorImpl::SetupSymSizeProperties() {
+  auto shape = tensor_->shape();
+  auto rank = shape.get().rank();
+  std::vector<c10::SymInt> sym_sizes;
+  sym_sizes.reserve(rank);
+
+  XLAIrBuilder a = XLAIrBuilder();
+  for (auto i : c10::irange(rank)) {
+    if (shape.get().is_dynamic_dimension(i)) {
+      auto dim_node = a.MakeSizeNode(tensor_->GetIrValue(), i);
+      auto symint_node = c10::make_intrusive<XLASymNodeImpl>(dim_node);
+      sym_sizes.push_back(c10::SymInt(
+          static_cast<c10::intrusive_ptr<c10::SymNodeImpl>>(symint_node)));
+    } else {
+      sym_sizes.push_back(c10::SymInt(shape.get().dimensions(i)));
+    }
+  }
+  sym_sizes_ = sym_sizes;
 }
 
 caffe2::TypeMeta XLATensorImpl::GetTypeMeta(const XLATensor& tensor) {
@@ -165,10 +205,8 @@ void XLATensorImpl::AtenInitialize() {
   // ATEN specific initialization calls placed below.
 }
 
-const at::Storage& XLATensorImpl::storage() const {
-  XLA_ERROR() << "XLA tensors do not have storage";
-}
+const at::Storage& XLATensorImpl::storage() const { return tensor_->Storage(); }
 
-bool XLATensorImpl::has_storage() const { return false; }
+bool XLATensorImpl::has_storage() const { return tensor_->Storage(); }
 
 }  // namespace torch_xla

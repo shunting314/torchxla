@@ -421,6 +421,12 @@ xla::PrimitiveType XlaHelpers::PromoteType(xla::PrimitiveType type1,
   return type1;
 }
 
+xla::PrimitiveType XlaHelpers::PromoteType(xla::PrimitiveType type1,
+                                           xla::PrimitiveType type2,
+                                           xla::PrimitiveType type3) {
+  return PromoteType(PromoteType(type1, type2), type3);
+}
+
 std::pair<xla::XlaOp, xla::XlaOp> XlaHelpers::PromoteValues(xla::XlaOp op1,
                                                             xla::XlaOp op2) {
   xla::PrimitiveType type1 = TypeOfXlaOp(op1);
@@ -440,8 +446,7 @@ std::tuple<xla::XlaOp, xla::XlaOp, xla::XlaOp> XlaHelpers::PromoteValues(
   xla::PrimitiveType type1 = TypeOfXlaOp(op1);
   xla::PrimitiveType type2 = TypeOfXlaOp(op2);
   xla::PrimitiveType type3 = TypeOfXlaOp(op3);
-  xla::PrimitiveType result_type =
-      PromoteType(PromoteType(type1, type2), type3);
+  xla::PrimitiveType result_type = PromoteType(type1, type2, type3);
   if (type1 != result_type) {
     op1 = ConvertTo(op1, type1, result_type, /*device=*/nullptr);
   }
@@ -575,6 +580,57 @@ xla::XlaOp XlaHelpers::PromotedLogicalUnaryOp(
   // PRED first.
   op = xla::ConvertElementType(op, xla::PrimitiveType::PRED);
   return unary_op(op);
+}
+
+xla::StatusOr<xla::XlaComputation> XlaHelpers::WrapXlaComputation(
+    const xla::XlaComputation& computation,
+    const std::vector<xla::Shape>& parameter_shapes,
+    std::vector<std::pair<int64_t, int64_t>> input_output_alias_pair) {
+  xla::XlaBuilder builder(computation.proto().name());
+
+  // Construct a single tuple parameter.
+  xla::Shape input_tuple_shape;
+  input_tuple_shape.set_element_type(xla::PrimitiveType::TUPLE);
+  input_tuple_shape.mutable_tuple_shapes()->reserve(parameter_shapes.size());
+  for (int i = 0; i < parameter_shapes.size(); ++i) {
+    *input_tuple_shape.add_tuple_shapes() = parameter_shapes[i];
+  }
+  xla::XlaOp input_tuple = xla::Parameter(&builder, 0, input_tuple_shape, "in");
+
+  // Handle the results of the original computation.
+  std::vector<xla::XlaOp> inner_params;
+  inner_params.reserve(parameter_shapes.size());
+  for (int i = 0; i < parameter_shapes.size(); ++i) {
+    inner_params.push_back(xla::GetTupleElement(input_tuple, i));
+  }
+
+  // Call the original computation.
+  xla::XlaOp orig_result = xla::Call(&builder, computation, inner_params);
+
+  // Rebuild aliasing.
+  for (const auto& [input_index, output_index] : input_output_alias_pair) {
+    // Both input and output will be a tuple so parameter_number will always be
+    // 0
+    builder.SetUpAlias(/*output_index=*/xla::ShapeIndex({output_index}),
+                       /*param_number=*/0,
+                       /*param_index=*/xla::ShapeIndex({input_index}));
+  }
+
+  return builder.Build(orig_result);
+}
+
+torch::lazy::Shape XlaHelpers::ConvertXlaShapeToLazy(const xla::Shape& shape) {
+  at::ScalarType scalar_type = TensorTypeFromXlaType(shape.element_type());
+  c10::optional<std::vector<bool>> is_symbolic = c10::nullopt;
+  if (shape.is_dynamic()) {
+    std::vector<bool> xla_dynamic_dimensions =
+        xla::util::ToVector<bool>(shape.dynamic_dimensions());
+    is_symbolic = c10::make_optional(xla_dynamic_dimensions);
+  }
+
+  return torch::lazy::Shape(scalar_type,
+                            xla::util::ToVector<int64_t>(shape.dimensions()),
+                            std::move(is_symbolic));
 }
 
 }  // namespace torch_xla

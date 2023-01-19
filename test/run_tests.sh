@@ -6,6 +6,19 @@ MAX_GRAPH_SIZE=500
 GRAPH_CHECK_FREQUENCY=100
 VERBOSITY=2
 
+# Note [Keep Going]
+#
+# Set the `CONTINUE_ON_ERROR` flag to `true` to make the CircleCI tests continue on error.
+# This will allow you to see all the failures on your PR, not stopping with the first
+# test failure like the default behavior.
+#
+# This flag should be set to `false`` by default. After testing your changes, make sure
+# to set this flag back to `false`` before you merge your PR.
+CONTINUE_ON_ERROR=false
+if [[ "$CONTINUE_ON_ERROR" == "1" ]]; then
+  set +e
+fi
+
 while getopts 'LM:C:V:' OPTION
 do
   case $OPTION in
@@ -56,18 +69,24 @@ function run_xla_ir_debug {
   XLA_IR_DEBUG=1 run_test "$@"
 }
 
+function run_xla_hlo_debug {
+  echo "Running with XLA_IR_DEBUG: $@"
+  XLA_HLO_DEBUG=1 run_test "$@"
+}
+
 function run_dynamic {
-  if [[ "$TPUVM_MODE" == "1" ]]; then
-    run_test "$@"
-  else
-    echo "Running in DynamicShape mode: $@"
-    XLA_EXPERIMENTAL="nonzero:masked_select:masked_scatter" run_test "$@"
-  fi
+  echo "Running in DynamicShape mode: $@"
+  XLA_EXPERIMENTAL="nonzero:masked_select:masked_scatter" run_test "$@"
 }
 
 function run_eager_debug {
   echo "Running in Eager Debug mode: $@"
   XLA_USE_EAGER_DEBUG_MODE=1 run_test "$@"
+}
+
+function run_save_tensor_file {
+  echo "Running in save tensor file mode: $@"
+  XLA_SAVE_TENSORS_FILE="/tmp/xla_test_save_ir.txt" run_test "$@"
 }
 
 function run_xla_backend_mp {
@@ -77,12 +96,26 @@ function run_xla_backend_mp {
 
 function run_pjrt {
   echo "Running in PjRt runtime: $@"
-  PJRT_DEVICE=CPU run_test "$@"
+  if [ -x "$(command -v nvidia-smi)" ]; then
+    PJRT_DEVICE=GPU run_test "$@"
+  else
+    # TODO(darisoy): run these tests with multiple CPU devices, this fails due to TF issue.
+    PJRT_DEVICE=CPU CPU_NUM_DEVICES=1 run_test "$@"
+  fi
 }
 
 function run_async_scalar {
   echo "Running in Async Scalar Upload mode: $@"
   XLA_TRANSFER_SCALAR_ASYNC=1 run_test "$@"
+}
+
+function run_torchrun {
+  echo "Running tests spawned by torchrun"
+  if [ -x "$(command -v nvidia-smi)" ]; then
+    run_test "$@"
+  else
+    echo "the tests need atleast two XLA workers to validate"
+  fi
 }
 
 function run_op_tests {
@@ -93,8 +126,16 @@ function run_op_tests {
   run_test python3 "$CDIR/../../test/test_indexing.py" "$@" -v TestIndexingXLA
   run_test python3 "$CDIR/../../test/test_indexing.py" "$@" -v NumpyTestsXLA
   run_dynamic python3 "$CDIR/../../test/test_nn.py" "$@" -v TestNNDeviceTypeXLA
+  run_dynamic python3 "$CDIR/../../test/nn/test_dropout.py" "$@" -v TestDropoutNNDeviceTypeXLA
+  run_dynamic python3 "$CDIR/../../test/nn/test_pooling.py" "$@" -v TestPoolingNNDeviceTypeXLA
+  run_dynamic python3 "$CDIR/../../test/nn/test_embedding.py" "$@" -v TestEmbeddingNNDeviceTypeXLA
+  run_dynamic python3 "$CDIR/../../test/nn/test_convolution.py" "$@" -v TestConvolutionNNDeviceTypeXLA
+  run_dynamic python3 "$CDIR/../../test/nn/test_multihead_attention.py" "$@" -v TestMultiheadAttentionNNDeviceTypeXLA
   run_dynamic python3 "$CDIR/../../test/test_type_promotion.py" "$@" -v TestTypePromotionXLA
+  run_test python3 "$CDIR/../../test/dynamo/test_torchxla_integration.py"
   run_dynamic python3 "$CDIR/test_operations.py" "$@" --verbosity=$VERBOSITY
+  run_dynamic python3 "$CDIR/test_dynamic_shapes.py"
+  run_dynamic python3 "$CDIR/test_dynamic_shape_models.py" "$@" --verbosity=$VERBOSITY
   run_opbyop python3 "$CDIR/test_operations.py" "$@" --verbosity=$VERBOSITY
   run_eager_debug python3 "$CDIR/test_operations.py" "$@" --verbosity=$VERBOSITY
   run_async_scalar python3 "$CDIR/test_operations.py" "$@" --verbosity=$VERBOSITY
@@ -104,10 +145,23 @@ function run_op_tests {
   run_test python3 "$CDIR/test_xla_dist.py"
   run_test python3 "$CDIR/test_profiler.py"
   run_test python3 "$CDIR/test_ops.py"
+  run_test python3 "$CDIR/test_metrics.py"
+  run_test python3 "$CDIR/dynamo/test_dynamo_integrations_util.py"
+  run_test python3 "$CDIR/dynamo/test_dynamo.py"
+  run_save_tensor_file python3 "$CDIR/dynamo/test_dynamo_graph_dump.py"
   run_downcast_bf16 python3 "$CDIR/test_data_type.py"
   run_use_bf16 python3 "$CDIR/test_data_type.py"
   run_test python3 "$CDIR/test_torch_distributed_xla_backend.py"
   run_xla_ir_debug python3 "$CDIR/test_env_var_mapper.py"
+  run_xla_hlo_debug python3 "$CDIR/test_env_var_mapper.py"
+  run_pjrt python3 "$CDIR/pjrt/test_experimental_pjrt.py"
+  run_pjrt python3 "$CDIR/pjrt/test_experimental_tpu.py"
+  run_pjrt python3 "$CDIR/pjrt/test_ddp.py"
+  run_pjrt python3 "$CDIR/pjrt/test_mesh_service.py"
+  run_pjrt python3 "$CDIR/spmd/test_xla_sharding.py"
+  run_pjrt python3 "$CDIR/spmd/test_xla_virtual_device.py"
+  run_test python3 "$CDIR/test_operations_hlo.py" "$@" --verbosity=$VERBOSITY
+  run_test python3 "$CDIR/test_input_output_aliases.py"
 }
 
 function run_mp_op_tests {
@@ -121,10 +175,12 @@ function run_mp_op_tests {
   run_test python3 "$CDIR/test_mp_save.py"
   run_test python3 "$CDIR/test_mp_mesh_reduce.py"
   run_test python3 "$CDIR/test_mp_sync_batch_norm.py"
+  run_torchrun python3 "$CDIR/test_allreduce_torchrun.py"
   run_xla_backend_mp python3 "$CDIR/test_torch_distributed_all_gather_xla_backend.py"
   run_xla_backend_mp python3 "$CDIR/test_torch_distributed_all_reduce_xla_backend.py"
   run_xla_backend_mp python3 "$CDIR/test_torch_distributed_multi_all_reduce_xla_backend.py"
   run_xla_backend_mp python3 "$CDIR/test_torch_distributed_reduce_scatter_xla_backend.py"
+  run_xla_backend_mp python3 "$CDIR/test_ddp.py"
 }
 
 function run_tests {

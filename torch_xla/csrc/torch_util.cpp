@@ -2,8 +2,31 @@
 
 #include "tensorflow/compiler/xla/xla_client/debug_macros.h"
 #include "tensorflow/compiler/xla/xla_client/xla_util.h"
+#include "torch_xla/csrc/helpers.h"
+#include "torch_xla/csrc/ops/constant.h"
+#include "torch_xla/csrc/tensor.h"
 
 namespace torch_xla {
+
+void SymIntElements::AddSymIntNodeElements(c10::SymInt& size) {
+  if (size.is_symbolic()) {
+    // c10::SymInt --(convert)--> c10::SymIntNode --(cast)-->
+    // lazy::SymIntNodeImpl
+    // --(get)--> lazy::NodePtr --(cast)--> lazy::DimensionNode
+    c10::SymNode symbolicIntNode = size.toSymNodeImpl();
+    auto* lazySymNode = dynamic_cast<XLASymNodeImpl*>(symbolicIntNode.get());
+    torch::lazy::NodePtr size_node = lazySymNode->node();
+    std::shared_ptr<torch::lazy::DimensionNode> dimension_node =
+        std::dynamic_pointer_cast<torch::lazy::DimensionNode>(size_node);
+    size_nodes_.push_back(size_node);
+    upper_bounds_.push_back(dimension_node->getStaticValue());
+    dynamic_dims_.push_back(dimension_node->isSymbolic());
+  } else {
+    size_nodes_.push_back(nullptr);
+    upper_bounds_.push_back(size.expect_int());
+    dynamic_dims_.push_back(size.is_symbolic());
+  }
+}
 
 at::ScalarType GetScalarType(const at::Scalar& scalar) {
   if (scalar.isFloatingPoint()) {

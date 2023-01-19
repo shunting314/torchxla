@@ -8,6 +8,11 @@
 #include "torch_xla/csrc/device.h"
 
 namespace torch_xla {
+
+// To be noted, the most appropriate way to adopt BackendData
+// should actually be letting ComputationClient::Data inherit it.
+// Since ComputationClient is within TensorFlow, and TF cannot
+// depend on PyTorch. Therefore, we have this intermediate wrapper.
 class XLAData : public torch::lazy::BackendData {
  public:
   XLAData(const torch::lazy::Shape& shape,
@@ -39,8 +44,8 @@ class XLAData : public torch::lazy::BackendData {
   xla::ComputationClient::DataPtr xla_data_;
 };
 
-// torch::lazy::BackendImplInterface* GetXlaBackendImpl();
+torch::lazy::BackendImplInterface* GetXlaBackendImpl();
 
-void InitXlaBackend();
+bool InitXlaBackend();
 
 }  // namespace torch_xla

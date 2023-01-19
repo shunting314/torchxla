@@ -28,14 +28,14 @@ xla::XlaOp BuildRreluBackward(xla::XlaOp grad_output, xla::XlaOp input,
                               xla::XlaOp noise, const at::Scalar& lower,
                               const at::Scalar& upper, bool training);
 
-xla::XlaOp BuildHardshrink(xla::XlaOp input, const at::Scalar& lambda);
+xla::XlaOp BuildHardshrink(xla::XlaOp input, xla::XlaOp lambda);
 xla::XlaOp BuildHardSigmoid(xla::XlaOp input);
 xla::XlaOp BuildHardSigmoidBackward(xla::XlaOp grad_output, xla::XlaOp input);
 xla::XlaOp BuildHardSwish(xla::XlaOp input);
 xla::XlaOp BuildHardSwishBackward(xla::XlaOp grad_output, xla::XlaOp input);
-xla::XlaOp BuildSoftshrink(xla::XlaOp input, const at::Scalar& lambda);
+xla::XlaOp BuildSoftshrink(xla::XlaOp input, xla::XlaOp lambda);
 xla::XlaOp BuildShrinkBackward(xla::XlaOp grad_output, xla::XlaOp input,
-                               const at::Scalar& lambda);
+                               xla::XlaOp lambda);
 
 xla::XlaOp BuildHardtanhBackward(xla::XlaOp grad_output, xla::XlaOp input,
                                  const at::Scalar& min_val,
@@ -43,10 +43,10 @@ xla::XlaOp BuildHardtanhBackward(xla::XlaOp grad_output, xla::XlaOp input,
 
 // Computes the leaky rectified linear unit:
 // LeakyReLU(x) = max(0, input) + negative_slope ∗ min(0, input).
-xla::XlaOp BuildLeakyRelu(xla::XlaOp input, double negative_slope);
+xla::XlaOp BuildLeakyRelu(xla::XlaOp input, xla::XlaOp negative_slope);
 
 xla::XlaOp BuildLeakyReluBackward(xla::XlaOp grad_output, xla::XlaOp input,
-                                  double negative_slope_value);
+                                  xla::XlaOp negative_slope);
 
 // Computes the sigmoid function using Tanh
 // Sigmoid(x) = (tanh(x ∗ 0.5) + 1) ∗ 0.5
@@ -97,8 +97,8 @@ xla::XlaOp BuildLogSigmoidBackward(xla::XlaOp grad_output, xla::XlaOp input,
                                    xla::XlaOp buffer);
 
 // Computes the Elu function of input.
-xla::XlaOp BuildElu(xla::XlaOp input, const at::Scalar& alpha,
-                    const at::Scalar& scale, const at::Scalar& input_scale);
+xla::XlaOp BuildElu(xla::XlaOp input, xla::XlaOp alpha, xla::XlaOp scale,
+                    xla::XlaOp input_scale);
 
 // Computes the backward of Elu.
 xla::XlaOp BuildEluBackward(xla::XlaOp grad_output, xla::XlaOp output,

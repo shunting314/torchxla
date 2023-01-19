@@ -161,7 +161,10 @@ class XrtComputationClient : public ComputationClient {
         : Data(std::move(device), std::move(device_shape)),
           handle_ptr(handle) {}
 
-    int64_t get_handle() const { return handle_ptr->handle(); }
+    int64_t get_handle() const {
+      XLA_CHECK(HasValue());
+      return handle_ptr->handle();
+    }
 
     OpaqueHandle GetOpaqueHandle() override { return get_handle(); }
 
@@ -245,11 +248,25 @@ class XrtComputationClient : public ComputationClient {
   std::vector<xla::util::ExceptionCleanup> LockAsyncDatas(
       absl::Span<const DataPtr> datas) override;
 
+  std::vector<DataPtr> GetDataShards(DataPtr data) override {
+    XLA_ERROR() << __FUNCTION__ << " not implemented";
+  }
+
   std::vector<DataPtr> TransferToServer(
       absl::Span<const TensorSource> tensors) override;
 
   void TransferToServer(absl::Span<const TensorSource> tensors,
                         absl::Span<const DataPtr> datas) override;
+
+  DataPtr TransferShardsToServer(absl::Span<const TensorSource> tensor_shards,
+                                 std::string device,
+                                 xla::Shape shape) override {
+    XLA_ERROR() << __FUNCTION__ << " not implemented";
+  }
+
+  DataPtr CopyToDevice(DataPtr data, std::string dst) override {
+    XLA_ERROR() << __FUNCTION__ << " not implemented";
+  }
 
   std::vector<Literal> TransferFromServer(
       absl::Span<const DataPtr> handles) override;
@@ -289,6 +306,20 @@ class XrtComputationClient : public ComputationClient {
   std::vector<std::string> GetLocalDevices() const override;
 
   std::vector<std::string> GetAllDevices() const override;
+
+  int GetProcessIndex() const override {
+    XLA_ERROR() << __FUNCTION__ << " not implemented";
+  }
+
+  int GetNumProcesses() const override {
+    XLA_ERROR() << __FUNCTION__ << " not implemented";
+  }
+
+  const absl::flat_hash_map<std::string,
+                            xla::ComputationClient::DeviceAttribute>&
+  GetDeviceAttributes(const std::string& device) override {
+    XLA_ERROR() << __FUNCTION__ << " not implemented";
+  }
 
   void SetReplicationDevices(
       std::shared_ptr<std::vector<std::string>> devices) override;

@@ -1,10 +1,11 @@
 import args_parse
+from functools import partial
 
 SUPPORTED_MODELS = [
     'alexnet', 'densenet121', 'densenet161', 'densenet169', 'densenet201',
     'inception_v3', 'resnet101', 'resnet152', 'resnet18', 'resnet34',
     'resnet50', 'squeezenet1_0', 'squeezenet1_1', 'vgg11', 'vgg11_bn', 'vgg13',
-    'vgg13_bn', 'vgg16', 'vgg16_bn', 'vgg19', 'vgg19_bn'
+    'vgg13_bn', 'vgg16', 'vgg16_bn', 'vgg19', 'vgg19_bn', 'vit_b_16'
 ]
 
 MODEL_OPTS = {
@@ -38,6 +39,14 @@ MODEL_OPTS = {
     '--flatten_parameters': {
         'action': 'store_true',
     },
+    '--auto_wrap_policy': {
+        'choices': ['none', 'size_based', 'type_based'],
+        'default': 'none',
+    },
+    '--auto_wrap_min_num_params': {
+        'type': int,
+        'default': 1e6,
+    },
     '--use_nested_fsdp': {
         'action': 'store_true',
     },
@@ -49,6 +58,16 @@ MODEL_OPTS = {
         'default': 'float32',
     },
     '--fp32_reduce_scatter': {
+        'action': 'store_true',
+    },
+    '--shard_param_on_dim_0': {
+        'action': 'store_true',
+    },
+    '--no_pin_layout_in_collective_ops': {
+        'action': 'store_false',
+        'dest': 'pin_layout_in_collective_ops',
+    },
+    '--use_small_fake_sample': {
         'action': 'store_true',
     },
 }
@@ -83,6 +102,8 @@ import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.test.test_utils as test_utils
 
 from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP, checkpoint_module
+from torch_xla.distributed.fsdp.wrap import (size_based_auto_wrap_policy,
+                                             transformer_auto_wrap_policy)
 
 DEFAULT_KWARGS = dict(
     batch_size=128,
@@ -141,7 +162,8 @@ def train_imagenet():
   print('==> Preparing data..')
   img_dim = get_model_property('img_dim')
   if FLAGS.fake_data:
-    train_dataset_len = 1200000  # Roughly the size of Imagenet dataset.
+    use_small_fake_sample = FLAGS.use_small_fake_sample
+    train_dataset_len = 50000 if use_small_fake_sample else 1200000  # Roughly the size of Imagenet dataset.
     train_loader = xu.SampleGenerator(
         data=(torch.zeros(FLAGS.batch_size, 3, img_dim, img_dim),
               torch.zeros(FLAGS.batch_size, dtype=torch.int64)),
@@ -209,23 +231,58 @@ def train_imagenet():
 
   device = xm.xla_device()
   model = get_model_property('model_fn')()
-  # Wrap the model with FSDP
-  # You may wrap all, a subset, or none of the sub-modules with inner FSDPs
-  # - to implement ZeRO-2, wrap none of the sub-modules
-  # - to implement ZeRO-3, wrap all of the sub-modules (nested FSDP)
-  # - you may wrap sub-modules at different granularity (e.g. at each resnet
-  #   stage or each residual block or each conv layer).
+  # Automatic wrapping sub-modules with inner FSDP
+  auto_wrap_policy = None
+  auto_wrapper_callable = None
+  if FLAGS.auto_wrap_policy != "none":
+    if FLAGS.auto_wrap_policy == "size_based":
+      # auto-wrap all sub-modules with a certain number of parameters (default 1e6)
+      auto_wrap_policy = partial(
+          size_based_auto_wrap_policy,
+          min_num_params=FLAGS.auto_wrap_min_num_params)
+    elif FLAGS.auto_wrap_policy == "type_based":
+      # auto-wrap all sub-modules in torchvision ResNet's BasicBlock or Bottleneck
+      # or torchvision transformer's EncoderBlock as an example
+      # (transformer_auto_wrap_policy wraps all sub-modules in transformer_layer_cls)
+      auto_wrap_policy = partial(
+          transformer_auto_wrap_policy,
+          transformer_layer_cls={
+              torchvision.models.resnet.BasicBlock,
+              torchvision.models.resnet.Bottleneck,
+              torchvision.models.vision_transformer.EncoderBlock,
+          })
+    else:
+      raise Exception(f"Invalid auto-wrap policy: {FLAGS.auto_wrap_policy}")
+    if FLAGS.use_gradient_checkpointing:
+      # Apply gradient checkpointing to auto-wrapped sub-modules if specified
+      auto_wrapper_callable = lambda m, *args, **kwargs: FSDP(
+          checkpoint_module(m), *args, **kwargs)
+
   fsdp_wrap = lambda m: FSDP(
-      m.to(device),
+      m,
       compute_dtype=getattr(torch, FLAGS.compute_dtype),
       fp32_reduce_scatter=FLAGS.fp32_reduce_scatter,
-      flatten_parameters=FLAGS.flatten_parameters)
-  # Apply gradient checkpointing to sub-modules if specified
-  grad_ckpt_wrap = checkpoint_module if FLAGS.use_gradient_checkpointing else (
-      lambda x: x)
+      flatten_parameters=FLAGS.flatten_parameters,
+      shard_param_on_dim_0=FLAGS.shard_param_on_dim_0,
+      pin_layout_in_collective_ops=FLAGS.pin_layout_in_collective_ops,
+      auto_wrap_policy=auto_wrap_policy,
+      auto_wrapper_callable=auto_wrapper_callable)
+  # Manually wrapping sub-modules with inner FSDP (if not using auto-wrap)
+  # (in this case, the sub-modules should be wrapped before the base model)
   if FLAGS.use_nested_fsdp:
+    assert FLAGS.auto_wrap_policy == "none", \
+        "--use_nested_fsdp is for manual nested wrapping should only be used" \
+        " without auto-wrapping"
+    # You may wrap all, a subset, or none of the sub-modules with inner FSDPs
+    # - to implement ZeRO-2, wrap none of the sub-modules
+    # - to implement ZeRO-3, wrap all of the sub-modules (nested FSDP)
+    # - you may wrap sub-modules at different granularity (e.g. at each resnet
+    #   stage or each residual block or each conv layer).
     # Here we apply inner FSDP at the level of child modules for ZeRO-3, which
     # corresponds to different stages in resnet (i.e. Stage 1 to 5).
+    # Apply gradient checkpointing to nested-wrapped sub-modules if specified
+    grad_ckpt_wrap = checkpoint_module if FLAGS.use_gradient_checkpointing else (
+        lambda x: x)
     for submodule_name, submodule in model.named_children():
       if sum(p.numel() for p in submodule.parameters()) == 0:
         # Skip those submodules without parameters (i.e. no need to shard them)

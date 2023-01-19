@@ -9,10 +9,10 @@
 #include "tensorflow/compiler/xla/client/lib/math.h"
 #include "tensorflow/compiler/xla/client/lib/slicing.h"
 #include "tensorflow/compiler/xla/shape_util.h"
+#include "tensorflow/compiler/xla/stream_executor/dnn.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/compiler/xla/xla_client/debug_macros.h"
 #include "tensorflow/compiler/xla/xla_client/util.h"
-#include "tensorflow/stream_executor/dnn.h"
 #include "torch/csrc/lazy/core/helpers.h"
 #include "torch/csrc/lazy/core/util.h"
 #include "torch_xla/csrc/convert_ops.h"
@@ -430,12 +430,6 @@ xla::XlaOp CreateMatMul(xla::XlaOp lhs, xla::XlaOp rhs) {
               << rhs_shape << ")";
 }
 
-xla::XlaOp BuildGer(xla::XlaOp lhs, xla::XlaOp rhs) {
-  xla::XlaOp lhs_reshaped = BuildUnsqueeze(lhs, 1);
-  xla::XlaOp rhs_reshaped = BuildUnsqueeze(rhs, 0);
-  return BuildDot(lhs_reshaped, rhs_reshaped);
-}
-
 xla::XlaOp BuildMatMul(xla::XlaOp lhs, xla::XlaOp rhs, xla::XlaOp bias) {
   xla::XlaOp dot = BuildDot(lhs, rhs);
   const xla::Shape& dot_shape = XlaHelpers::ShapeOfXlaOp(dot);
@@ -463,6 +457,11 @@ xla::XlaOp BuildDot(xla::XlaOp lhs, xla::XlaOp rhs) {
   xla::PrecisionConfig precision_config =
       XlaHelpers::BuildPrecisionConfig(XlaHelpers::mat_mul_precision());
   return xla::Dot(lhs, rhs, &precision_config);
+}
+
+xla::XlaOp BuildSigmoidBackward(xla::XlaOp grad_output, xla::XlaOp output,
+                                xla::XlaOp scalar_1) {
+  return grad_output * (scalar_1 - output) * output;
 }
 
 xla::XlaOp BuildBernoulli(xla::XlaOp probability, xla::XlaOp seed,
@@ -1016,6 +1015,78 @@ xla::XlaOp BuildRoll(xla::XlaOp input, absl::Span<const int64_t> shifts,
   }
 
   return need_flatten ? xla::Reshape(input, input_shape.dimensions()) : input;
+}
+
+xla::XlaOp BuildAddcdiv(xla::XlaOp input, xla::XlaOp t1, xla::XlaOp t2,
+                        xla::XlaOp val) {
+  val = MaybeConvertTo(val, XlaHelpers::ShapeOfXlaOp(t1).element_type());
+  return XlaHelpers::PromotedAdd(
+      input, XlaHelpers::PromotedMul(XlaHelpers::PromotedDiv(t1, t2), val));
+}
+
+xla::XlaOp BuildAddcmul(xla::XlaOp input, xla::XlaOp t1, xla::XlaOp t2,
+                        xla::XlaOp val) {
+  val = MaybeConvertTo(val, XlaHelpers::ShapeOfXlaOp(t1).element_type());
+  return XlaHelpers::PromotedAdd(
+      input, XlaHelpers::PromotedMul(XlaHelpers::PromotedMul(t1, t2), val));
+}
+
+xla::XlaOp BuildCdistForward(xla::XlaOp x1, xla::XlaOp x2, xla::XlaOp p,
+                             bool use_hamming, bool use_chebyshev) {
+  const xla::Shape& x1_shape = XlaHelpers::ShapeOfXlaOp(x1);
+  const xla::Shape& x2_shape = XlaHelpers::ShapeOfXlaOp(x2);
+  p = MaybeConvertTo(p, x1_shape.element_type());
+
+  XLA_CHECK(x1_shape.rank() == x2_shape.rank() && x1_shape.rank() >= 2)
+      << "x1 and x2 must have the same rank with >= 2 dimensions";
+
+  int64_t rank = x1_shape.rank();
+
+  XLA_CHECK(x1_shape.dimensions(rank - 1) == x2_shape.dimensions(rank - 1))
+      << "The last dimension of x1 and x2 must match";
+
+  for (int dim = 0; dim < rank - 2; dim++) {
+    XLA_CHECK(x1_shape.dimensions(dim) == x2_shape.dimensions(dim))
+        << absl::StrCat("The ", dim, "th dimension of x1 and x2 must match");
+  }
+
+  std::vector<int64_t> bcast_shape(x1_shape.dimensions().begin(),
+                                   x1_shape.dimensions().end());
+  bcast_shape.insert(bcast_shape.begin() + rank - 1,
+                     x2_shape.dimensions(rank - 2));
+  xla::XlaOp x1_bcast =
+      xla::BroadcastInDim(BuildUnsqueeze(x1, rank - 1), bcast_shape,
+                          torch::lazy::Iota<int64_t>(rank + 1));
+  xla::XlaOp x2_bcast =
+      xla::BroadcastInDim(BuildUnsqueeze(x2, rank - 2), bcast_shape,
+                          torch::lazy::Iota<int64_t>(rank + 1));
+  xla::XlaOp init_value = xla::Zero(x1.builder(), x1_shape.element_type());
+
+  if (use_hamming) {
+    // handle p == 0
+    xla::XlaOp diff = xla::ConvertElementType(xla::Ne(x1_bcast, x2_bcast),
+                                              x1_shape.element_type());
+    xla::XlaOp reduced = xla::Reduce(
+        diff, init_value,
+        XlaHelpers::CreateAddComputation(x1_shape.element_type()), {rank});
+    return reduced;
+  } else if (use_chebyshev) {
+    // handle p == +inf
+    xla::XlaOp diff = xla::Abs(x1_bcast - x2_bcast);
+    xla::XlaOp reduced = xla::Reduce(
+        diff, init_value,
+        XlaHelpers::CreateMaxComputation(x1_shape.element_type()), {rank});
+    return reduced;
+  } else {
+    // handle general case
+    xla::XlaOp diff = xla::Pow(xla::Abs(x1_bcast - x2_bcast), p);
+    xla::XlaOp reduced = xla::Reduce(
+        diff, init_value,
+        XlaHelpers::CreateAddComputation(x1_shape.element_type()), {rank});
+    xla::XlaOp one = xla::One(x1.builder(), x1_shape.element_type());
+    xla::XlaOp p_norm = xla::Pow(reduced, xla::Div(one, p));
+    return p_norm;
+  }
 }
 
 }  // namespace torch_xla

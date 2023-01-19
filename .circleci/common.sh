@@ -2,6 +2,12 @@
 
 set -ex
 
+# See Note [Keep Going]
+CONTINUE_ON_ERROR=false
+if [[ "$CONTINUE_ON_ERROR" == "1" ]]; then
+  set +e
+fi
+
 # System default cmake 3.10 cannot find mkl, so point it to the right place.
 # CMAKE_PREFIX_PATH will default to (in this order):
 # 1. CMAKE_PREFIX_PATH (if it exists)
@@ -49,7 +55,10 @@ function checkout_torch_pin_if_available() {
 
 function install_deps_pytorch_xla() {
   XLA_DIR=$1
-  USE_CACHE="${2:-1}"
+  USE_CACHE="${2:-0}"
+
+  # Install pytorch deps
+  pip install sympy
 
   # Install ninja to speedup the build
   pip install ninja
@@ -58,13 +67,12 @@ function install_deps_pytorch_xla() {
   pip install hypothesis
   pip install cloud-tpu-client
   pip install absl-py
-  pip install --upgrade numpy>=1.18.5
+  pip install --upgrade "numpy>=1.18.5"
   pip install --upgrade numba
 
   # Using the Ninja generator requires CMake version 3.13 or greater
-  pip install cmake>=3.13 --upgrade
+  pip install "cmake>=3.13" --upgrade
 
-  # Bazel doesn't work with sccache gcc. https://github.com/bazelbuild/bazel/issues/3642
   sudo apt-get -qq update
 
   sudo apt-get -qq install npm nodejs
@@ -85,16 +93,18 @@ function install_deps_pytorch_xla() {
     sudo ln -s $CUBLAS_PATTERN /usr/local/cuda/include
   fi
 
-  # Install bazels3cache for cloud cache
-  sudo npm install -g bazels3cache
-  BAZELS3CACHE="$(which bazels3cache)"
-  if [ -z "${BAZELS3CACHE}" ]; then
-    echo "Unable to find bazels3cache..."
-    exit 1
-  fi
-  bazels3cache --bucket=${XLA_CLANG_CACHE_S3_BUCKET_NAME} --maxEntrySizeBytes=0 --logging.level=verbose
   # Use cloud cache to build when available.
   if [[ "$USE_CACHE" == 1 ]]; then
+    # Install bazels3cache for cloud cache
+    sudo npm install -g n
+    sudo n 16.18.0
+    sudo npm install -g bazels3cache
+    BAZELS3CACHE="$(which /usr/local/bin/bazels3cache)"
+    if [ -z "${BAZELS3CACHE}" ]; then
+      echo "Unable to find bazels3cache..."
+      exit 1
+    fi
+    /usr/local/bin/bazels3cache --bucket=${XLA_CLANG_CACHE_S3_BUCKET_NAME} --maxEntrySizeBytes=0 --logging.level=verbose
     sed -i '/bazel build/ a --remote_http_cache=http://localhost:7777 \\' $XLA_DIR/build_torch_xla_libs.sh
   fi
 }
@@ -126,6 +136,8 @@ function run_torch_xla_tests() {
 
     # GPU tests
     if [ -x "$(command -v nvidia-smi)" ]; then
+      python test/test_train_mp_imagenet_fsdp.py --fake_data --use_nested_fsdp --use_small_fake_sample --num_epochs=1
+      python test/test_train_mp_imagenet_fsdp.py --fake_data --auto_wrap_policy type_based --use_small_fake_sample --num_epochs=1
       # Syncfree SGD optimizer tests
       if [ -d ./torch_xla/amp/syncfree ]; then
         echo "Running Syncfree Optimizer Test"

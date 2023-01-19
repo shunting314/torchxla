@@ -19,8 +19,10 @@ namespace util {
 namespace {
 
 hash_t SingleShapeHash(const Shape& shape, hash_t seed) {
-  for (auto dim : shape.layout().minor_to_major()) {
-    seed = HashCombine(seed, dim);
+  if (shape.has_layout()) {
+    for (auto dim : shape.layout().minor_to_major()) {
+      seed = HashCombine(seed, dim);
+    }
   }
   for (auto dim : shape.dimensions()) {
     seed = HashCombine(seed, dim);
@@ -79,7 +81,7 @@ void ReportComputationError(
     absl::Span<const Shape* const> output_shapes) {
   std::stringstream ss;
   for (size_t i = 0; i < computations.size(); ++i) {
-    std::string hlo_text = GetComputationHloText(*computations[i]).ValueOrDie();
+    std::string hlo_text = GetComputationHloText(*computations[i]).value();
     MaybeSaveHloGraph(hlo_text, i);
     ss << MaybeDumpHloGraph(output_shapes, hlo_text, i);
   }

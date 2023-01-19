@@ -7,9 +7,11 @@ import os
 import re
 import threading
 import time
+from typing import List, Optional
 import torch
 import torch.nn.functional as F
 import torch_xla
+from torch_xla.experimental import pjrt
 import torch_xla.core.xla_env_vars as xenv
 import torch_xla.debug.metrics_saver as ms
 import torch_xla.utils.utils as xu
@@ -156,38 +158,47 @@ def xrt_world_size(defval=1):
   Returns:
     The number of devices which is taking part of the replication.
   """
+  if pjrt.using_pjrt():
+    return pjrt.world_size()
+
   return xu.getenv_as(xenv.WORLD_SIZE, int, defval=defval)
 
 
 def get_ordinal(defval=0):
-  """Retrieves the replication ordinal of the current process.
+  """Retrieves the replication ordinal of the current thread.
 
   The ordinals range from 0 to `xrt_world_size()` minus 1.
 
   Args:
     defval (int, optional): The default value to be returned in case there is no
-      replication information available.
+      replication information available. Ignored for PjRt.
       Default: 0
 
   Returns:
-    The replication ordinal of the current process.
+    The replication ordinal of the current thread.
   """
+  if pjrt.using_pjrt():
+    return pjrt.global_ordinal()
+
   return xu.getenv_as(xenv.ORDINAL, int, defval=defval)
 
 
 def get_local_ordinal(defval=0):
-  """Retrieves the replication local ordinal of the current process.
+  """Retrieves the replication local ordinal of the current thread.
 
   The local ordinals range from 0 to the number of local devices minus 1.
 
   Args:
     defval (int, optional): The default value to be returned in case there is no
-      replication information available.
+      replication information available. Ignored for PjRt.
       Default: 0
 
   Returns:
-    The replication local ordinal of the current process.
+    The replication local ordinal of the current thread.
   """
+  if pjrt.using_pjrt():
+    return pjrt.local_ordinal()
+
   ordinal = xu.getenv_as(xenv.LOCAL_ORDINAL, int, defval=-1)
   if ordinal >= 0:
     return ordinal
@@ -227,9 +238,18 @@ def xla_device(n=None, devkind=None):
   Returns:
     A `torch.device` with the requested instance.
   """
+  # When SPMD is enabled, we always return `xla:0` to the user, and
+  # under the hood we use virtual device logic for every xla tensor
+  if xu.check_env_flag('XLA_USE_SPMD'):
+    device = 'xla:0'
+    torch_xla._XLAC._xla_set_default_device(device)
+    return torch.device(device)
+
+  if pjrt.using_pjrt():
+    return pjrt.xla_device(n, devkind)
+
   if n is None:
-    devices = get_xla_supported_devices(
-        devkind=devkind if devkind is not None else None)
+    devices = get_xla_supported_devices(devkind=devkind)
     assert devices, 'No devices of {} kind'.format(devkind or 'ANY')
     # This is a utility API mainly called from tests or simple code which wants
     # to just have a single device to run on. Set the default device so that
@@ -750,6 +770,39 @@ def collective_permute(value, pairs):
   return result[0]
 
 
+def collective_broadcast(tensors: List[torch.Tensor],
+                         root_ordinal: int = 0,
+                         groups: Optional[List[int]] = None,
+                         pin_layout: bool = True) -> None:
+  """Broadcast values of `tensors` from root replica to other replicas in-place.
+
+  Args:
+    tensors (list): List of `torch.Tensor`s to broadcast.
+    root_ordinal (int): Ordinal of replica with values to broadcast.
+    groups (list, optional): A list of list, representing the replica groups for
+      the `all_reduce()` operation. Example: `[[0, 1, 2, 3], [4, 5, 6, 7]]`
+        defines two groups, one with the `[0, 1, 2, 3]` replicas and one with
+        the `[4, 5, 6, 7]` replicas. If `None` there will be only one group with
+        all the replicas in it.
+    pin_layout (bool, optional): whether to pin the layout for this communication op.
+      Layout pining can prevent potential data corruption when each process that
+      participate in the communication has slightly different program, but it might
+      cause some xla compiation to fail. Unpin the layout when you see error message
+      like "HloModule has a mix of layout constrained".
+  """
+  with torch.no_grad():
+    # We must produce the exact same graph in each replica to prevent hanging,
+    # so each replica must have the same multiply op with the same parameters.
+    for tensor in tensors:
+      scale = torch.tensor(
+          1 if get_ordinal() == root_ordinal else 0, dtype=tensor.dtype)
+      # Transfer scale tensor as device data instead of constant 1 or 0.
+      xscale = send_cpu_data_to_device(scale, tensor.device)
+      tensor.mul_(xscale)
+
+  all_reduce(REDUCE_SUM, tensors, groups=groups, pin_layout=pin_layout)
+
+
 def send(value, channel_id):
   """Performs a XLA `Send()` operation on the input tensor.
 
@@ -1055,6 +1108,9 @@ def rendezvous(tag, payload=b'', replicas=[]):
     The payloads exchanged by all the other cores, with the payload of core
     ordinal `i` at position `i` in the returned tuple.
   """
+  if pjrt.using_pjrt():
+    return pjrt.rendezvous(tag, payload, replicas or None)
+
   return torch_xla._XLAC._xla_rendezvous(get_ordinal(), tag, payload, replicas)
 
 

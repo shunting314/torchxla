@@ -35,11 +35,13 @@ import torch_xla.distributed.data_parallel as dp
 import torch_xla.debug.metrics as met
 import torch_xla.debug.model_comparator as mc
 import torch_xla.distributed.parallel_loader as pl
+from torch_xla.experimental import pjrt
 import torch_xla.test.test_utils as xtu
 import torch_xla.utils.utils as xu
 import torch_xla.utils.serialization as xser
 import torch_xla.core.xla_model as xm
 import torch_xla.core.functions as xf
+import torch_xla.debug.profiler as xp
 import torchvision
 import unittest
 
@@ -747,6 +749,14 @@ class TestDynamicShape(XlaTestCase):
         torch.masked_select(x, mask), 0)
     self.assertEqual(x_dim0_shape.item(), 3)
 
+  def test_nonzero_cast(self):
+    t1 = torch.ones(5, 2, device=xm.xla_device())
+    # Result of the nonzero should be the index type. Currently
+    # index type is s64 on cpu and gpu, but s32 on TPU. We should be
+    # able to cast it to any other type without error.
+    t2 = torch.nonzero(t1.int()).float()
+    xm.mark_step()
+
 
 class TestOptimizationBarrier(XlaTestCase):
 
@@ -1085,6 +1095,11 @@ class TestAtenXlaTensor(XlaTestCase):
     self.runAtenTest((torch.randint(10, (2, 3)), torch.randint(
         10, (2, 3)), torch.randint(10, (3, 3))),
                      lambda x, y, z: torch.addmm(x, y, z))
+
+  def test_baddmm_integer_types(self):
+    self.runAtenTest(
+        (torch.randint(10, (10, 3, 5)), torch.randint(10, (10, 3, 4)),
+         torch.randint(10, (10, 4, 5))), lambda x, y, z: torch.baddbmm(x, y, z))
 
   def test_view_empty(self):
     # These used to throw floating point exception.
@@ -1800,12 +1815,34 @@ class TestAtenXlaTensor(XlaTestCase):
 
     self.runAtenTest([torch.randint(1, 4, (7, 7), dtype=torch.uint8)], test_fn)
 
+  def test_too_many_parameter(self):
+
+    def test_fn(t):
+      # TPU can handle ~3500 parameters on v3 without parameter tupling.
+      for i in range(4000):
+        t += torch.tensor(i, dtype=torch.float, device=t.device)
+      return t
+
+    # This test is for PjRT only
+    if pjrt.using_pjrt():
+      self.runAtenTest([torch.tensor(20.0)], test_fn)
+
   def test_view_and_copy_(self):
     xla_device = xm.xla_device()
     x = torch.tensor([1.5, 2.5, 3.5, 4.5, 5.5, 6.5], device='cpu')
     y = torch.tensor([0, 0, 0, 0, 0, 0], device=xla_device)
     y[::2].copy_(x[::2])
     self.assertEqual(y, [1, 0, 3, 0, 5, 0])
+
+  def test_view_and_multi_mark_step(self):
+    xla_device = xm.xla_device()
+    t1 = torch.zeros(100, device=xla_device)
+    t1[10] = 113
+    xm.mark_step()
+    t1[12] = 1123
+    xm.mark_step()
+    self.assertNotIn('update_slice',
+                     torch_xla._XLAC._get_xla_tensors_text([t1]))
 
   def test_binaryop_order(self):
     xla_device = xm.xla_device()
@@ -1823,6 +1860,55 @@ class TestAtenXlaTensor(XlaTestCase):
     const_hlo = hlo_text.split('\n')[1]
     assert 'prim::Constant' in const_hlo
     assert 'xla::device_data' not in const_hlo
+
+  def test_emb_bf16(self):
+    xla_device = xm.xla_device()
+    index = torch.ones(1, dtype=torch.long, device=xla_device)
+    emb = torch.nn.Embedding(1024, 128, device=xla_device)
+    emb = emb.to(torch.bfloat16)
+    emb_out = emb(index)
+    assert emb_out.dtype == torch.bfloat16
+
+  def test_transpose_1d(self):
+
+    def test_fn(t1):
+      return t1.t()
+
+    self.runAtenTest([torch.arange(15, dtype=torch.int32)], test_fn)
+
+  def test_transpose_1d_inplace(self):
+
+    def test_fn(t1):
+      return t1.t_()
+
+    self.runAtenTest([torch.arange(15, dtype=torch.int32)], test_fn)
+
+  def test_sigmoid_bounds(self):
+    torch.manual_seed(0)
+    xla_device = xm.xla_device()
+    for _ in range(100):
+      x = torch.rand(1000).to(xla_device)
+      lower_bound = torch.sigmoid(x * (-100.0))
+      upper_bound = torch.sigmoid(x * (100.0))
+      assert torch.all(lower_bound >= 0.0)
+      assert torch.all(upper_bound <= 1.0)
+
+  def test_cached_addcdiv(self):
+    xla_device = xm.xla_device()
+    met.clear_all()
+
+    t1 = torch.randn(1, 3).to(xla_device)
+    t2 = torch.randn(1, 3).to(xla_device)
+    t3 = torch.randn(1, 3).to(xla_device)
+    t1.addcdiv_(t2, t3, value=0.1)
+    xm.mark_step()
+    self.assertEqual(met.metric_data("TransferToServerTime")[0], 4)
+
+    # The following two scalars shouldn't trigger TransferToServerTime.
+    t1.addcdiv_(t2, t3, value=0.1)
+    t1.addcdiv_(t2, t3, value=0.1)
+    xm.mark_step()
+    self.assertEqual(met.metric_data("TransferToServerTime")[0], 4)
 
 
 class MNISTComparator(nn.Module):
@@ -2044,6 +2130,23 @@ class MpDecoratorTest(XlaTestCase):
   def test_mp_decorator(self):
     xla_device = xm.xla_device()
     self.assertTrue(xla_device.type == 'xla')
+
+
+class XpTraceTest(XlaTestCase):
+
+  def test_non_empty_scope(self):
+    with self.assertRaisesRegex(
+        RuntimeError, r'Expecting scope to be empty but it is conv1.1'):
+      with xp.Trace('conv1'):
+        xm.mark_step()
+
+
+class RegisterXLAKeyTest(XlaTestCase):
+
+  def test_multi_init_xla_backend(self):
+    torch_xla._XLAC._init_xla_lazy_backend()
+    torch_xla._XLAC._init_xla_lazy_backend()
+    self.assertEqual(met.counter_value("RegisterXLAFunctions"), 1)
 
 
 class TestGeneric(XlaTestCase):

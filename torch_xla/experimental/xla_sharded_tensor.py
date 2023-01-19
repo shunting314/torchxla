@@ -48,6 +48,20 @@ class XLAShardedTensor(torch.Tensor):
   # Note: we can consider returning a callback or even define
   # sharding at XLAShardedTensor construction after pjrt migration.
   local_shards: List[XLAShard] = None
+  # A logical device topology, each element describes
+  # a number of devices in the corresponding axis.
+  # NOTE: we could use more specific device-rank mapping, e.g., ShardingSpec,
+  # if needed. The change shouldn't be difficult, or create another constructor.
+  mesh_shape: Tuple[int]  # TODO: create a wrapper for named axes
+  # Specifies how each input rank is sharded (index to mesh_shape)
+  # or replicated (None). For example, we can shard an 8x10 tensor
+  # 4-way row-wise, and replicate column-wise.
+  # >> input = torch.randn(8, 10)
+  # >> mesh_shape = (4, 2)
+  # >> assert np.prod(mesh_shape) == len(xm.get_xla_supported_devices())
+  # >> partition_spec = (0, None)
+  # >> assert len(input.shape) == len(partition_spec)
+  partition_spec: Tuple[int, None]
 
   __slots__ = ['global_tensor']
 
@@ -68,9 +82,7 @@ class XLAShardedTensor(torch.Tensor):
 
   @property
   def sharding_spec(self):
-    # TODO(yeounoh) `torch_xla._XLAC._get_xla_sharding_spec(self.global_tensor)`
-    # is broken after ltc migration, needs a further investigation.
-    return NotImplemented
+    return torch_xla._XLAC._get_xla_sharding_spec(self.global_tensor)
 
   @property
   def shards(self):

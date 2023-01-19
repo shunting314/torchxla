@@ -11,6 +11,7 @@
 #include "torch/csrc/lazy/core/ir_util.h"
 #include "torch_xla/csrc/ir_util.h"
 #include "torch_xla/csrc/lowering_context.h"
+#include "torch_xla/csrc/tensor_util.h"
 #include "torch_xla/csrc/xla_sharding_util.h"
 
 namespace torch_xla {
@@ -181,7 +182,8 @@ std::string GenerateTextNodeSpec(const torch::lazy::Node* node,
 }  // namespace
 
 std::string DumpUtil::ToDot(absl::Span<const torch::lazy::Node* const> nodes) {
-  auto post_order = Util::ComputePostOrder(nodes);
+  auto post_order = torch::lazy::Util::ComputePostOrder(
+      c10::makeArrayRef(nodes.data(), nodes.size()));
   return PostOrderToDot(post_order, nodes);
 }
 
@@ -222,7 +224,8 @@ std::string DumpUtil::PostOrderToDot(
 }
 
 std::string DumpUtil::ToText(absl::Span<const torch::lazy::Node* const> nodes) {
-  auto post_order = Util::ComputePostOrder(nodes);
+  auto post_order = torch::lazy::Util::ComputePostOrder(
+      c10::makeArrayRef(nodes.data(), nodes.size()));
   return PostOrderToText(post_order, nodes);
 }
 
@@ -254,11 +257,27 @@ std::string DumpUtil::ToHlo(c10::ArrayRef<torch::lazy::Value> values,
     lowering_ctx.AddResult(
         torch::lazy::Output(ir_value.node.get(), ir_value.index));
   }
+
   // Annotate HLO sharding selectively in the compuation.
   // This is no-op if an instruction doesn't have any sharding annotation.
-  ShardingUtil::SetHloSharding(&lowering_ctx);
-
+  bool is_sharded = ShardingUtil::SetHloSharding(&lowering_ctx);
   xla::XlaComputation computation = ConsumeValue(lowering_ctx.BuildXla());
+  if (is_sharded) {
+    xla::Shape shape = MakeShapeWithDeviceLayout(
+        ConsumeValue(computation.GetProgramShape()).result(),
+        static_cast<XlaDeviceType>(device.type()));
+    std::vector<xla::ComputationClient::CompileInstance> instances;
+    instances.push_back({std::move(computation), device.toString(),
+                         xla::ComputationClient::Get()->GetCompilationDevices(
+                             device.toString(), {}),
+                         &shape, /*parameter_is_tupled_arguments=*/false,
+                         is_sharded});
+    std::vector<std::shared_ptr<xla::ComputationClient::Computation>>
+        computations =
+            xla::ComputationClient::Get()->Compile(std::move(instances));
+    return ConsumeValue(
+        xla::util::GetComputationHloText(computations[0]->computation()));
+  }
   return ConsumeValue(xla::util::GetComputationHloText(computation));
 }
 

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 import tempfile
 import subprocess
 
@@ -46,6 +47,10 @@ def _set_missing_flags(flags, sets):
 def _setup_xla_flags():
   flags = os.environ.get('XLA_FLAGS', '').split(' ')
   flags = _set_missing_flags(flags, (('xla_cpu_enable_fast_math', 'false'),))
+  flags = _set_missing_flags(
+      flags, (('xla_gpu_simplify_all_fp_conversions', 'false'),))
+  flags = _set_missing_flags(flags,
+                             (('xla_gpu_force_compilation_parallelism', '8'),))
   os.environ['XLA_FLAGS'] = ' '.join(flags)
 
 
@@ -58,6 +63,7 @@ def _setup_default_env():
   _set_missing_env('TF_CPP_MIN_LOG_LEVEL', '1')
   _set_missing_env('GRPC_VERBOSITY', 'ERROR')
   _set_missing_env('ALLOW_MULTIPLE_LIBTPU_LOAD', '1')
+  _set_missing_env('TPU_ML_PLATFORM', 'PyTorch/XLA')
   if server_is_alive():
     _set_missing_env('XRT_START_LOCAL_SERVER', '0')
 
@@ -81,11 +87,18 @@ def _summarize_fn_tracker():
 
 
 def _tpu_vm_init():
+  module_path = os.path.dirname(__file__)
+  bundled_libtpu_path = os.path.join(module_path, 'lib/libtpu.so')
+  if os.path.isfile(bundled_libtpu_path) and not os.getenv('TPU_LIBRARY_PATH'):
+    logger.info('Using bundled libtpu.so (%s)', bundled_libtpu_path)
+    os.environ['TPU_LIBRARY_PATH'] = bundled_libtpu_path
+    return
+
   try:
     import libtpu
     libtpu.configure_library_path()
   except ImportError:
-    return
+    pass
 
 
 # These needs to be called before the _XLAC module is loaded.
@@ -106,9 +119,9 @@ from .version import __version__
 logger.info(
     'Letting libtpu.so load fail during _XLAC import. libtpu.so will be loaded '
     'from `libtpu` Python package when the ComputationClient is created.')
-# _tpu_vm_init() will update TPU_LIBRARY_PATH to Python package, if available
-os.environ['TPU_LIBRARY_PATH'] = '/dev/null'
+os.environ['TPU_LOAD_LIBRARY'] = '0'
 import _XLAC
+del os.environ['TPU_LOAD_LIBRARY']
 
 _tpu_vm_init()
 
@@ -119,10 +132,10 @@ def _prepare_to_exit():
     _summarize_fn_tracker()
 
 
-def _map_xla_env_vars_to_lazy():
-  _XLAC._map_xla_env_vars_to_lazy()
+def _init_xla_lazy_backend():
+  _XLAC._init_xla_lazy_backend()
 
 
 atexit.register(_prepare_to_exit)
 _apply_patches()
-_map_xla_env_vars_to_lazy()
+_init_xla_lazy_backend()

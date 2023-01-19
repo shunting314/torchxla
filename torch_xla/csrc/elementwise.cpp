@@ -69,10 +69,20 @@ xla::XlaOp BuildRelu(xla::XlaOp input) {
                              0, input_shape.element_type(), input.builder()));
 }
 
-xla::XlaOp BuildHardshrink(xla::XlaOp input, const at::Scalar& lambda) {
+xla::XlaOp BuildHardshrink(xla::XlaOp input, xla::XlaOp lambda) {
   const xla::Shape& shape = XlaHelpers::ShapeOfXlaOp(input);
-  xla::XlaOp zero = xla::Zero(input.builder(), shape.element_type());
-  return xla::Select(Between(input, -lambda, lambda), zero, input);
+  xla::PrimitiveType input_element_type = shape.element_type();
+  xla::XlaOp zero = xla::Zero(input.builder(), input_element_type);
+
+  // The conversion here is needed because when we do computation such as
+  // broadcast or subtraction for input and lambda, XLA disallows mixed
+  // precision for float point types.
+  lambda = MaybeConvertTo(lambda, input_element_type);
+  xla::XlaOp check_low = BuildComparisonOp(at::aten::ge, input, zero - lambda);
+  xla::XlaOp check_high = BuildComparisonOp(at::aten::le, input, lambda);
+  xla::XlaOp between = xla::And(check_low, check_high);
+
+  return xla::Select(between, zero, input);
 }
 
 xla::XlaOp BuildHardSigmoid(xla::XlaOp input) {
@@ -118,23 +128,33 @@ xla::XlaOp BuildHardSwishBackward(xla::XlaOp grad_output, xla::XlaOp input) {
   return xla::Select(xla::Ge(input, three), grad_output, stepone);
 }
 
-xla::XlaOp BuildSoftshrink(xla::XlaOp input, const at::Scalar& lambda) {
-  xla::XlaBuilder* builder = input.builder();
-  const xla::Shape& shape = XlaHelpers::ShapeOfXlaOp(input);
-  xla::XlaOp zero = xla::Zero(input.builder(), shape.element_type());
-  xla::XlaOp xla_lambd =
-      XlaHelpers::ScalarBroadcast(lambda.to<double>(), shape, builder);
-  xla::XlaOp le_lambda_branch =
-      xla::Select(xla::Lt(input, Neg(xla_lambd)), input + xla_lambd, zero);
-  return xla::Select(xla::Le(input, xla_lambd), le_lambda_branch,
-                     input - xla_lambd);
+xla::XlaOp BuildSoftshrink(xla::XlaOp input, xla::XlaOp lambda) {
+  const xla::Shape& input_shape = XlaHelpers::ShapeOfXlaOp(input);
+  xla::PrimitiveType input_element_type = input_shape.element_type();
+  lambda = MaybeConvertTo(lambda, input_element_type);
+
+  xla::XlaOp zero = xla::Zero(input.builder(), input_element_type);
+  xla::XlaOp toTheLeft = xla::Lt(input, xla::Neg(lambda));
+  xla::XlaOp toTheRight = xla::Gt(input, lambda);
+  return xla::Select(toTheLeft, xla::Add(input, lambda),
+                     xla::Select(toTheRight, xla::Sub(input, lambda), zero));
 }
 
 xla::XlaOp BuildShrinkBackward(xla::XlaOp grad_output, xla::XlaOp input,
-                               const at::Scalar& lambda) {
+                               xla::XlaOp lambda) {
   const xla::Shape& shape = XlaHelpers::ShapeOfXlaOp(input);
-  xla::XlaOp zero = xla::Zero(input.builder(), shape.element_type());
-  return xla::Select(Between(input, -lambda, lambda), zero, grad_output);
+  xla::PrimitiveType input_element_type = shape.element_type();
+  xla::XlaOp zero = xla::Zero(input.builder(), input_element_type);
+
+  // The conversion here is needed because when we do computation such as
+  // broadcast or subtraction for input and lambda, XLA disallows mixed
+  // precision for float point types.
+  lambda = MaybeConvertTo(lambda, input_element_type);
+  xla::XlaOp check_low = BuildComparisonOp(at::aten::ge, input, zero - lambda);
+  xla::XlaOp check_high = BuildComparisonOp(at::aten::le, input, lambda);
+  xla::XlaOp between = xla::And(check_low, check_high);
+
+  return xla::Select(between, zero, grad_output);
 }
 
 xla::XlaOp BuildHardtanhBackward(xla::XlaOp grad_output, xla::XlaOp input,
@@ -145,8 +165,8 @@ xla::XlaOp BuildHardtanhBackward(xla::XlaOp grad_output, xla::XlaOp input,
   return xla::Select(Between(input, min_val, max_val), grad_output, zero);
 }
 
-xla::XlaOp BuildLeakyRelu(xla::XlaOp input, double negative_slope_value) {
-  return BuildLeakyReluBackward(input, input, negative_slope_value);
+xla::XlaOp BuildLeakyRelu(xla::XlaOp input, xla::XlaOp negative_slope) {
+  return BuildLeakyReluBackward(input, input, negative_slope);
 }
 
 std::vector<xla::XlaOp> BuildRrelu(xla::XlaOp input, const at::Scalar& lower,
@@ -168,7 +188,9 @@ std::vector<xla::XlaOp> BuildRrelu(xla::XlaOp input, const at::Scalar& lower,
     noise = xla::Select(xla::Gt(input, zero), one, slope);
     output = input * noise;
   } else {
-    double negative_slope = (lower.to<double>() + upper.to<double>()) / 2;
+    xla::XlaOp negative_slope =
+        XlaHelpers::ScalarValue((lower.to<double>() + upper.to<double>()) / 2,
+                                shape.element_type(), input.builder());
     noise = xla::Broadcast(zero, shape.dimensions());
     output = BuildLeakyRelu(input, negative_slope);
   }
@@ -194,11 +216,10 @@ xla::XlaOp BuildRreluBackward(xla::XlaOp grad_output, xla::XlaOp input,
 }
 
 xla::XlaOp BuildLeakyReluBackward(xla::XlaOp grad_output, xla::XlaOp input,
-                                  double negative_slope_value) {
+                                  xla::XlaOp negative_slope) {
   const xla::Shape& input_shape = XlaHelpers::ShapeOfXlaOp(input);
+  negative_slope = MaybeConvertTo(negative_slope, input_shape.element_type());
   xla::XlaOp zero = xla::Zero(input.builder(), input_shape.element_type());
-  xla::XlaOp negative_slope = XlaHelpers::ScalarValue(
-      negative_slope_value, input_shape.element_type(), input.builder());
   return xla::Select(xla::Gt(input, zero), grad_output,
                      negative_slope * grad_output);
 }
@@ -218,12 +239,7 @@ xla::XlaOp BuildPrelu(xla::XlaOp input, xla::XlaOp weight) {
   return xla::Select(xla::Gt(input, zero), input, product);
 }
 
-xla::XlaOp BuildSigmoid(xla::XlaOp input) {
-  const xla::Shape& shape = XlaHelpers::ShapeOfXlaOp(input);
-  xla::XlaOp half = XlaHelpers::ScalarValue<float>(0.5, shape.element_type(),
-                                                   input.builder());
-  return half + half * xla::Tanh(half * input);
-}
+xla::XlaOp BuildSigmoid(xla::XlaOp input) { return xla::Logistic(input); }
 
 xla::XlaOp BuildSiLUBackward(xla::XlaOp grad_output, xla::XlaOp input) {
   const xla::Shape& shape = XlaHelpers::ShapeOfXlaOp(input);
@@ -292,8 +308,6 @@ xla::XlaOp BuildGelu(xla::XlaOp input) {
                                                    input.builder());
   xla::XlaOp one = XlaHelpers::ScalarValue<float>(1.0, shape.element_type(),
                                                   input.builder());
-  xla::XlaOp m_sqrt2 = XlaHelpers::ScalarValue<float>(
-      M_SQRT2, shape.element_type(), input.builder());
   xla::XlaOp m_sqrt1_2 = XlaHelpers::ScalarValue<float>(
       M_SQRT1_2, shape.element_type(), input.builder());
 
@@ -370,22 +384,19 @@ xla::XlaOp BuildLogSigmoidBackward(xla::XlaOp grad_output, xla::XlaOp input,
   return grad_output * (xla::Neg(max_deriv) - sign * (buffer - one) / buffer);
 }
 
-xla::XlaOp BuildElu(xla::XlaOp input, const at::Scalar& alpha,
-                    const at::Scalar& scale, const at::Scalar& input_scale) {
+xla::XlaOp BuildElu(xla::XlaOp input, xla::XlaOp alpha, xla::XlaOp scale,
+                    xla::XlaOp input_scale) {
   const xla::Shape& shape = XlaHelpers::ShapeOfXlaOp(input);
-  xla::XlaOp scaled_input =
-      input * XlaHelpers::ScalarValue(input_scale, shape.element_type(),
-                                      input.builder());
+  alpha = MaybeConvertTo(alpha, shape.element_type());
+  scale = MaybeConvertTo(scale, shape.element_type());
+  input_scale = MaybeConvertTo(input_scale, shape.element_type());
+  xla::XlaOp scaled_input = input * input_scale;
   xla::XlaOp zero = xla::Zero(input.builder(), shape.element_type());
   xla::XlaOp one = XlaHelpers::ScalarValue<float>(1.0, shape.element_type(),
                                                   input.builder());
-  xla::XlaOp alpha_scalar =
-      XlaHelpers::ScalarValue(alpha, shape.element_type(), input.builder());
-  xla::XlaOp scale_scalar =
-      XlaHelpers::ScalarValue(scale, shape.element_type(), input.builder());
   return xla::Select(xla::Le(input, zero),
-                     alpha_scalar * (xla::Exp(scaled_input) - one), input) *
-         scale_scalar;
+                     alpha * (xla::Exp(scaled_input) - one), input) *
+         scale;
 }
 
 xla::XlaOp BuildEluBackward(xla::XlaOp grad_output, xla::XlaOp output,

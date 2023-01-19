@@ -14,6 +14,7 @@
 #include "absl/strings/str_split.h"
 #include "tensorflow/cc/ops/const_op.h"
 #include "tensorflow/compiler/xla/shape_util.h"
+#include "tensorflow/compiler/xla/stream_executor/lib/mathutil.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/compiler/xla/xla_client/env_vars.h"
 #include "tensorflow/compiler/xla/xla_client/multi_wait.h"
@@ -75,7 +76,7 @@ class TensorAllocator : public tensorflow::Allocator {
     alignment = std::max<size_t>(alignment, sizeof(void*));
     // To call aligned_alloc(), num_bytes must be multiple of alignment.
     num_bytes =
-        tensorflow::MathUtil::CeilOfRatio(num_bytes, alignment) * alignment;
+        stream_executor::port::MathUtil::CeilOfRatio(num_bytes, alignment) * alignment;
 
     AllocKey alloc_key = {alignment, num_bytes};
     void* block = nullptr;
@@ -551,8 +552,7 @@ std::vector<Literal> XrtComputationClient::TransferFromServer(
       for (size_t i = 0; i < outputs.size(); ++i) {
         size_t li = session_work->index_mapping[i];
         LiteralProto response = ParseProto<LiteralProto>(outputs[i]);
-        results[li] =
-            std::move(Literal::CreateFromProto(response).ValueOrDie());
+        results[li] = std::move(Literal::CreateFromProto(response).value());
         total_size += results[li].size_bytes();
       }
     };
@@ -585,22 +585,8 @@ std::vector<ComputationClient::ComputationPtr> XrtComputationClient::Compile(
   for (size_t i = 0; i < instances.size(); ++i) {
     auto builder = [&, this, i]() {
       const CompileInstance& instance = instances[i];
-
-      // (yeounoh) check if spmd partitioning is used, non-SPMD enabled
-      // HLO module shouln't be affected by this.
-      // If is_spmd == true, then we assign multi-cores to a single
-      // replica; otherwise, all cores participate in replication.
-      bool is_spmd = false;
-      auto& module_proto = instance.computation.proto();
-      if (module_proto.has_spmd_output_sharding() ||
-          module_proto.spmd_parameters_shardings_size() > 0) {
-        std::cout << "has_spmd_output_sharding(): "
-                  << module_proto.has_spmd_output_sharding()
-                  << "spmd_parameters_shardings_size(): "
-                  << module_proto.spmd_parameters_shardings_size() << std::endl;
-        is_spmd = true;
-      }
-      XLA_CHECK(!is_spmd) << "XrtComputationClient doesn't support SPMD.";
+      XLA_CHECK(!instance.is_sharded)
+          << "XrtComputationClient doesn't support SPMD.";
 
       std::unique_ptr<xrt::XLAComputation> xrt_computation =
           CreateXrtComputation(instance.computation, instance.devices,
@@ -1121,13 +1107,13 @@ std::unique_ptr<xrt::XLAComputation> XrtComputationClient::CreateXrtComputation(
   }
 
   *config->mutable_program_shape() =
-      computation.GetProgramShape().ValueOrDie().ToProto();
+      computation.GetProgramShape().value().ToProto();
   if (output_shape != nullptr) {
     *config->mutable_program_shape()->mutable_result() =
         output_shape->ToProto();
   }
   *xrt_computation->mutable_hlo_snapshot() =
-      std::move(*computation.Snapshot().ConsumeValueOrDie());
+      std::move(*computation.Snapshot().value());
   return xrt_computation;
 }
 
@@ -1605,7 +1591,13 @@ std::map<std::string, Metric> XrtComputationClient::GetMetrics() const {
     tensorflow::SessionOptions session_options;
     session_options.env = tensorflow::Env::Default();
     session_options.target = worker_target.second;
-    session_options.config = session_cache_->GetConfig();
+
+    // GPU device cannot reuse ClusterSpec from session cache, otherwise
+    // tensorflow throws an error here:
+    // https://github.com/tensorflow/tensorflow/blob/1cb0c5b850657ae1362a241fabb16253336dd8c3/tensorflow/core/distributed_runtime/master.cc#L402
+    if (!absl::StartsWith(GetDefaultDevice(), "GPU")) {
+      session_options.config = session_cache_->GetConfig();
+    }
 
     tensorflow::Scope root = tensorflow::Scope::NewRootScope();
     tensorflow::ClientSession session(root, session_options);
@@ -1639,6 +1631,10 @@ std::map<std::string, Metric> XrtComputationClient::GetMetrics() const {
             break;
           case xrt::MetricValues::BYTES:
             percentile.unit_of_measure = Percentile::UnitOfMeaure::kBytes;
+            break;
+          default:
+            TF_LOG(FATAL) << "Invalid unit of measure for xrt metric: "
+                          << xrt_metric.name();
             break;
         }
         percentile.start_nstime = xrt_percentile.start_nstime();
@@ -1707,6 +1703,7 @@ void XrtComputationClient::PrepareToExit() {
     size_t run_id = triggered_task_->Activate();
     triggered_task_->WaitForRun(run_id);
     TF_VLOG(1) << "Waiting XRT handle releaser thread ... done!";
+    triggered_task_->Stop();
   }
 }
 

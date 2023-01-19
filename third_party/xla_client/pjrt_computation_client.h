@@ -7,6 +7,7 @@
 #include "tensorflow/compiler/xla/client/xla_computation.h"
 #include "tensorflow/compiler/xla/literal.h"
 #include "tensorflow/compiler/xla/pjrt/pjrt_client.h"
+#include "tensorflow/compiler/xla/pjrt/pjrt_executable.h"
 #include "tensorflow/compiler/xla/shape.h"
 #include "tensorflow/compiler/xla/xla_client/computation_client.h"
 #include "tensorflow/compiler/xla/xla_client/debug_macros.h"
@@ -20,11 +21,18 @@ class PjRtComputationClient : public ComputationClient {
 
   DataPtr CreateDataPlaceholder(std::string device, Shape shape) override;
 
+  std::vector<DataPtr> GetDataShards(DataPtr data) override;
+
   std::vector<DataPtr> TransferToServer(
       absl::Span<const TensorSource> tensors) override;
 
   std::vector<Literal> TransferFromServer(
       absl::Span<const DataPtr> handles) override;
+
+  DataPtr TransferShardsToServer(absl::Span<const TensorSource> tensor_shards,
+                                 std::string device, xla::Shape shape) override;
+
+  DataPtr CopyToDevice(DataPtr data, std::string dst) override;
 
   std::vector<ComputationPtr> Compile(
       std::vector<CompileInstance> instances) override;
@@ -34,6 +42,12 @@ class PjRtComputationClient : public ComputationClient {
       const std::string& device,
       const ExecuteComputationOptions& options) override;
 
+  std::vector<std::vector<DataPtr>> ExecuteReplicated(
+      const Computation& computation,
+      const std::vector<std::vector<DataPtr>>& arguments,
+      absl::Span<const std::string> devices,
+      const ExecuteReplicatedOptions& options) override;
+
   size_t GetNumDevices() const override;
 
   std::string GetDefaultDevice() const override;
@@ -41,6 +55,14 @@ class PjRtComputationClient : public ComputationClient {
   std::vector<std::string> GetLocalDevices() const override;
 
   std::vector<std::string> GetAllDevices() const override;
+
+  int GetProcessIndex() const override { return client_->process_index(); };
+
+  int GetNumProcesses() const override;
+
+  const absl::flat_hash_map<std::string,
+                            xla::ComputationClient::DeviceAttribute>&
+  GetDeviceAttributes(const std::string& device) override;
 
   void SetReplicationDevices(
       std::shared_ptr<std::vector<std::string>> devices) override;
@@ -71,14 +93,6 @@ class PjRtComputationClient : public ComputationClient {
     XLA_ERROR() << __FUNCTION__ << " not implemented";
   };
 
-  std::vector<std::vector<DataPtr>> ExecuteReplicated(
-      const Computation& computation,
-      const std::vector<std::vector<DataPtr>>& arguments,
-      absl::Span<const std::string> devices,
-      const ExecuteReplicatedOptions& options) override {
-    XLA_ERROR() << __FUNCTION__ << " not implemented";
-  };
-
   std::vector<std::vector<DataPtr>> ExecuteParallel(
       absl::Span<const Computation* const> computations,
       const std::vector<std::vector<DataPtr>>& arguments,
@@ -101,9 +115,7 @@ class PjRtComputationClient : public ComputationClient {
     XLA_ERROR() << __FUNCTION__ << " not implemented";
   };
 
-  std::map<std::string, Metric> GetMetrics() const override {
-    XLA_ERROR() << __FUNCTION__ << " not implemented";
-  };
+  std::map<std::string, Metric> GetMetrics() const override;
 
   MemoryInfo GetMemoryInfo(const std::string& device) override {
     XLA_ERROR() << __FUNCTION__ << " not implemented";
@@ -124,13 +136,9 @@ class PjRtComputationClient : public ComputationClient {
              std::shared_ptr<PjRtBuffer> buffer)
         : Data(std::move(device), std::move(device_shape)), buffer(buffer) {}
 
-    void* get_handle() const {
-      return buffer->AcquireExternalReference()
-          .ValueOrDie()
-          ->OpaqueDeviceMemoryDataPointer();
-    };
     OpaqueHandle GetOpaqueHandle() override {
-      return reinterpret_cast<std::uintptr_t>(get_handle());
+      XLA_CHECK(HasValue());
+      return reinterpret_cast<std::uintptr_t>(buffer.get());
     };
     void Assign(const Data& data) override;
     bool HasValue() const override {
@@ -140,15 +148,43 @@ class PjRtComputationClient : public ComputationClient {
     std::shared_ptr<PjRtBuffer> buffer;
   };
 
+  struct PjRtShardedData : public Data {
+    PjRtShardedData(std::string device, Shape shape) = delete;
+
+    PjRtShardedData(std::string device, Shape shape,
+                    std::vector<std::shared_ptr<PjRtData>> shards)
+        : Data(std::move(device), std::move(shape)), shards(shards) {}
+
+    OpaqueHandle GetOpaqueHandle() override {
+      // Always returns `OpaqueHandle` of the first shard.
+      return shards[0]->GetOpaqueHandle();
+    }
+    void Assign(const Data& data) override {
+      XLA_ERROR() << __FUNCTION__ << " not supported.";
+    }
+    bool HasValue() const override {
+      if (!shards.empty()) {
+        for (auto& shard : shards) {
+          if (!shard->HasValue()) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+
+    std::vector<std::shared_ptr<PjRtData>> shards;
+  };
+
   struct PjRtComputation : public Computation {
     PjRtComputation(XlaComputation computation, ProgramShape program_shape,
                     std::vector<std::string> devices,
-                    std::unique_ptr<xla::PjRtExecutable> executable)
+                    std::unique_ptr<xla::PjRtLoadedExecutable> executable)
         : Computation(std::move(computation), std::move(program_shape),
                       std::move(devices)),
           executable(std::move(executable)) {}
 
-    std::unique_ptr<xla::PjRtExecutable> executable;
+    std::unique_ptr<xla::PjRtLoadedExecutable> executable;
   };
 };
 

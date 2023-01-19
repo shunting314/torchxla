@@ -14,10 +14,19 @@ Computation::Computation(std::string name, xla::XlaComputation computation)
       xla_client_computation_->computation().proto().SerializeAsString());
 }
 
+Computation::Computation(std::string name, xla::XlaComputation computation,
+                         torch::lazy::BackendDevice device)
+    : name_(std::move(name)) {
+  std::vector<std::string> device_string = {device.toString()};
+  xla_client_computation_ =
+      std::make_shared<xla::ComputationClient::Computation>(
+          std::move(computation), device_string);
+}
+
 Computation::Computation(
     std::shared_ptr<xla::ComputationClient::Computation> xla_client_computation)
     : name_(""), hash_(0) {
-  xla_client_computation_ = xla_client_computation;
+  xla_client_computation_ = std::move(xla_client_computation);
 }
 
 std::vector<torch::lazy::ComputationPtr> WrapClientComputation(

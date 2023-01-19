@@ -37,9 +37,19 @@ DISABLED_TORCH_TESTS_ANY = {
         'test_addcmul',  # FIXME: complex dtype
         'test_clamp',  # slow
         'test_clamp_propagates_nans_xla',  # XLA min/max ignores Nans.
+        'test_cummax_cummin',  # at::_ops::cummax_out::call(at::Tensor const&, long, at::Tensor&, at::Tensor&)
         'test_cummax_discontiguous',  # Checking contiguity
         'test_cummin_discontiguous',  # Checking contiguity
+        'test_diff_xla_bool',  # Received signal 6 & 11
+        'test_diff_xla_float32',  # Received signal 6 & 11
+        'test_diff_xla_float64',  # Received signal 6 & 11
+        'test_diff_xla_int16',  # Received signal 6 & 11
+        'test_diff_xla_int32',  # Received signal 6 & 11
+        'test_diff_xla_int64',  # Received signal 6 & 11
+        'test_diff_xla_int8',  # Received signal 6 & 11
+        'test_diff_xla_uint8',  # Received signal 6 & 11
         'test_discontiguous_out_cumsum',  # Checking contiguity
+        'test_invalid_shapes_grid_sampler_xla',  # tsl::CurrentStackTrace[abi:cxx11]()
         'test_lu_unpack',  # very slow compile
         'test_view',  # doesn't raise
         'test_sub_typing',  # doesn't raise
@@ -87,6 +97,7 @@ DISABLED_TORCH_TESTS_ANY = {
         'test_cdist_large_batch',
         'test_cdist_non_contiguous',
         'test_cdist_non_contiguous_batch',
+        'test_cov',  # XLA generates inf while nan is expected
         'test_broadcast_batched_matmul',  # incorrect Size
         'test_bincount',
         'test_view_all_dtypes_and_devices',  # uses half
@@ -190,6 +201,7 @@ DISABLED_TORCH_TESTS_ANY = {
         'test_random_from_to_xla',  # doesn't raise
         'test_random_to_xla',  # doesn't raise
         'test_copy_',  # test against complex32 which is nto supported
+        'test_assertRaisesRegex_ignore_msg_non_native_device_xla',  # segfault on wheel sanity test
     },
 
     # test_view_ops.py
@@ -204,6 +216,7 @@ DISABLED_TORCH_TESTS_ANY = {
     # test_indexing.py
     'TestIndexingXLA': {
         'test_setitem_expansion_error',  # expecting a different runtime error
+        'test_setitem_scalars',  # Received signal 6 & 11
         'test_multiple_byte_mask',  # expecting a different runtime error
         'test_empty_slice',  # stride
         'test_byte_tensor_assignment',  # expecting a different runtime error
@@ -211,6 +224,7 @@ DISABLED_TORCH_TESTS_ANY = {
         'test_byte_mask_accumulate',  # expecting a different runtime error
         'test_bool_indices',  # expecting a different runtime error
         'test_index_getitem_copy_bools_slices',  # storage
+        'test_index_setitem_bools_slices',  # torch::autograd::dispatch_set_item
         'test_getitem_scalars',  # storage
         'test_empty_ndim_index',  # expecting a different runtime error
         'test_index_put_byte_indices_xla',  # expecting a different runtime error
@@ -229,26 +243,23 @@ DISABLED_TORCH_TESTS_ANY = {
 
     # test_nn.py
     'TestNNDeviceTypeXLA': {
+        'test_cross_entropy_label_smoothing_errors_xla',  # Received signal 6 & 11
         'test_clip_grad_norm_error_if_nonfinite_xla',  # FIXME: edge case of norm
-        'test_embedding_backward',  # sparse
-        'test_embedding_dense_grad',  # slow
         'test_batchnorm_grad',  # FIXME! UndefinedTensorImpl::_singleton
-        'test_pool_invalid_size',  # expecting a different runtime error
         'test_nonlinearity_propagate_nan',  # relu6 with a nan tensor returns a tensor([0.]) instead of a nan tensor
         'test_InstanceNorm3d_general',  # precision (1e-2)
         'test_InstanceNorm2d_general',  # precision (1e-2)
         'test_InstanceNorm1d_general',  # precision (1e-2)
-        'test_EmbeddingBag_per_sample_weights_failures',  # expecting a different runtime error
         'test_variable_sequence',  # PackedSequence batch_sizes.device.type should be CPU but is XLA
-        'test_embedding_bag_device',  # FIXME! Unsupported device type for sparse layout: xla
         'test_batchnorm_eval',  # FIXME! UndefinedTensorImpl::_singleton
         'test_MaxPool2d_indices',  # lowering
         'test_MaxPool1d_indices',  # lowering
-        'test_EmbeddingBag_per_sample_weights_and_no_offsets',  # FIXME! Unsupported device type for sparse layout: xla
+        'test_multi_margin_loss_errors_xla',  # Received signal 6 & 11
         'test_softshrink_negative',  # runtime error
         'test_nll_loss_empty_tensor_reduction_mean',  # floating point division 0 by 0, expecting nan but get 0
         'test_nll_loss_invalid_target_dim',  # expecting a specific error message.
         'test_nll_loss_invalid_weights',  # expecting a specific error message.
+        'test_nll_loss_mismatched_batch_xla',  # Received signal 6 & 11
         'test_fold',  # The gradient check code errors out on type() call, and code is slow on XLA
         'test_unfold',  # The gradient check code errors out on type() call, and code is slow on XLA
         'test_hardsigmoid_grad_xla',  # gradient check is slow
@@ -263,11 +274,50 @@ DISABLED_TORCH_TESTS_ANY = {
         'test_silu_inplace_overlap_xla',  # doesn't raise
         'test_softplus_inplace_overlap_xla',  # doesn't raise
         'test_softshrink_inplace_overlap_xla',  # doesn't raise
-        'test_Conv2d_backward_depthwise_xla_float64',  # slow compilation
         'test_leaky_relu_inplace_with_neg_slope_xla',  # expecting a specific error message
         'test_upsamplingBicubic2d_correctness_xla',  # FIXME! Got dtypes torch.float32 and torch.float64
-        'test_conv3d_same_padding_backward_xla',  # XLA tensors do not have storage,
         'test_CTCLoss_no_batch_dim_xla',  # Value out of range
+        'test_upsamplingBilinear2d_xla',  # precision on GPU/TPU, slow compilation on CPU
+    },
+
+    # test/nn/test_dropout.py
+    'TestDropoutNNDeviceTypeXLA': {
+        'test_Dropout2d_xla',  # Started to pass
+    },
+
+    # test/nn/test_pooling.py
+    'TestPoolingNNDeviceTypeXLA': {
+        'test_AdaptiveMaxPool1d_indices_xla_float32',  # THPEngine_run_backward
+        'test_AdaptiveMaxPool2d_indices_xla_float32',  # THPEngine_run_backward
+        'test_AdaptiveMaxPool3d_indices_xla_float32',  # THPEngine_run_backward
+        'test_MaxPool1d_indices_xla_float32',  # THPEngine_run_backward
+        'test_MaxPool2d_indices_xla_float32',  # THPEngine_run_backward
+        'test_MaxPool3d_indices_xla_float32',  # THPEngine_run_backward
+        'test_pool_invalid_size',  # expecting a different runtime error
+    },
+
+    # test/nn/test_embedding.py
+    'TestEmbeddingNNDeviceTypeXLA': {
+        'test_embedding_backward',  # sparse
+        'test_embedding_dense_grad',  # slow
+        'test_embedding_bag_out_of_bounds_idx_xla',  # singal
+        'test_EmbeddingBag_per_sample_weights_failures',  # expecting a different runtime error
+        'test_embedding_bag_device',  # FIXME! Unsupported device type for sparse layout: xla
+        'test_embedding_scalar_weight_error_xla',  # tsl::CurrentStackTrace[abi:cxx11]
+        'test_EmbeddingBag_per_sample_weights_and_no_offsets',  # FIXME! Unsupported device type for sparse layout: xla
+    },
+
+    # test/nn/test_convolution.py
+    'TestConvolutionNNDeviceTypeXLA': {
+        'test_Conv2d_backward_depthwise_xla_float64',  # slow compilation
+        'test_conv3d_same_padding_backward_xla',  # XLA tensors do not have storage
+        'test_conv3d_valid_padding_backward_xla_float64',  # Jacobian
+        'test_noncontig_conv_grad_xla_float64',  # Jacobian
+    },
+
+    # test/nn/test_multihead_attention.py
+    'TestMultiheadAttentionNNDeviceTypeXLA': {
+        'test_multihead_attn_fast_path_query_and_bias_have_different_dtypes_xla_float64',  # tsl::CurrentStackTrace
     },
 
     # test_type_promotion.py
@@ -287,6 +337,7 @@ DISABLED_TORCH_TESTS_TPU_ONLY = {
     # test_torch.py
     'TestDevicePrecisionXLA': {
         'test_digamma',  # Precision issue at the first assert, then NAN handling (both on TPU)
+        'test_clamp_xla_float64',  # 'dtype' do not match: torch.float64 != torch.float32
     },
     'TestTensorDeviceOpsXLA': {
         'test_pow_inplace_xla',  # (TPU) 0.0032 vs 0.001
@@ -344,7 +395,10 @@ DISABLED_TORCH_TESTS_TPU_ONLY = {
         'test_cov_xla',  # precision (9.53674e-07 vs 0)
         'test_diff_xla_float32',  # expected instruction to have shape equal
         'test_diff_xla_float64',  # expected instruction to have shape equal
-        'test_nullary_op_mem_overlap_xla'  # core dumped
+        'test_nullary_op_mem_overlap_xla',  # core dumped
+        'test_index_reduce',  # takes too long
+        'test_take_xla_float64',  # 'dtype' do not match: torch.float32 != torch.float64
+        'test_take_xla_int16',  # 'dtype' do not match: torch.int32 != torch.int16
     },
 
     # test_indexing.py
@@ -360,7 +414,6 @@ DISABLED_TORCH_TESTS_TPU_ONLY = {
         'test_Dropout',  # too slow
         'test_EmbeddingBag_per_sample_weights_and_new_offsets_xla',  # server side crash
         'test_EmbeddingBag_per_sample_weights_and_offsets_xla',  # server side crash
-        'test_upsamplingBilinear2d_xla',  # precision
         'test_upsamplingNearest2d_xla',  # precision
         'test_GRU_grad_and_gradgrad_xla_float64',  # grad check failure
         'test_LSTM_grad_and_gradgrad_xla_float64',  # grad check failure
@@ -371,22 +424,33 @@ DISABLED_TORCH_TESTS_TPU_ONLY = {
         'test_upsamplingNearest3d_xla',  # grad check failure
         'test_cross_entropy_label_smoothing_consistent_index_target_and_probs_xla',  # precision
         'test_cross_entropy_loss_prob_target_all_reductions_xla',  # precision
+        'test_cross_entropy_label_smoothing_errors_xla',  # crash
+        'test_cross_entropy_label_smoothing_weight_ignore_indices_xla',  # crash
+        'test_multi_margin_loss_errors_xla',  # crash
+        'test_nll_loss_mismatched_batch_xla',  # crash
+        'test_logsigmoid_out_xla',  # 'dtype' do not match: torch.float32 != torch.float64
     },
 
     # test_type_promotion.py
     'TestTypePromotionXLA': {
         'test_bfloat16_xla',  # half support
-    }
-}
+    },
 
-DISABLED_TORCH_TESTS_TPUVM_ONLY = {
-    # test_nn.py
-    'TestNNDeviceTypeXLA': {
+    # test_drop_out.py
+    'TestDropoutNNDeviceTypeXLA': {
+        'test_Dropout_xla',  # takes too long
+    },
+
+    # test_pooling,py
+    'TestPoolingNNDeviceTypeXLA': {
         'test_AdaptiveMaxPool1d_indices_xla',  #  TODO: segfualt on TPUVM
         'test_AdaptiveMaxPool2d_indices_xla',  #  TODO: segfualt on TPUVM
         'test_AdaptiveMaxPool3d_indices_xla',  #  TODO: segfualt on TPUVM
         'test_MaxPool3d_indices_xla',  #  TODO: segfualt on TPUVM
-        'test_multi_margin_loss_errors_xla',  #  TODO: segfualt on TPUVM
+        'test_MaxPool1d_indices_xla_float32',  #  TODO: segfualt on TPUVM
+        'test_MaxPool2d_indices_xla_float32',  #  TODO: segfualt on TPUVM
+        'test_adaptive_pooling_max_nhwc',  #  TODO: segfualt on TPUVM for f32 and f64
+        'test_pooling_max_nhwc'  #  TODO: segfualt on TPUVM for f32 and f64
     },
 }
 
@@ -440,18 +504,10 @@ def union_of_disabled_tests(sets):
   return union
 
 
-def on_tpuvm():
-  config = os.getenv('XRT_TPU_CONFIG')
-  return config and re.match('^localservice;[0-9]+;localhost:[0-9]+', config)
-
-
 DISABLED_TORCH_TESTS_CPU = DISABLED_TORCH_TESTS_ANY
 DISABLED_TORCH_TESTS_GPU = union_of_disabled_tests(
     [DISABLED_TORCH_TESTS_ANY, DISABLED_TORCH_TESTS_GPU_ONLY])
-DISABLED_TORCH_TESTS_TPU = union_of_disabled_tests([
-    DISABLED_TORCH_TESTS_ANY, DISABLED_TORCH_TESTS_TPU_ONLY,
-    DISABLED_TORCH_TESTS_TPUVM_ONLY
-]) if on_tpuvm() else union_of_disabled_tests(
+DISABLED_TORCH_TESTS_TPU = union_of_disabled_tests(
     [DISABLED_TORCH_TESTS_ANY, DISABLED_TORCH_TESTS_TPU_ONLY])
 
 DISABLED_TORCH_TESTS = {

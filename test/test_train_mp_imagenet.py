@@ -1,3 +1,4 @@
+from torch_xla.experimental import pjrt
 import args_parse
 
 SUPPORTED_MODELS = [
@@ -25,6 +26,12 @@ MODEL_OPTS = {
         'type': int,
     },
     '--test_only_at_end': {
+        'action': 'store_true',
+    },
+    '--ddp': {
+        'action': 'store_true',
+    },
+    '--ddp_pjrt': {
         'action': 'store_true',
     },
 }
@@ -56,6 +63,9 @@ import torch_xla.utils.utils as xu
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.test.test_utils as test_utils
+
+import torch.distributed as dist
+import torch_xla.distributed.xla_backend
 
 DEFAULT_KWARGS = dict(
     batch_size=128,
@@ -112,6 +122,15 @@ def _train_update(device, step, loss, tracker, epoch, writer):
 
 
 def train_imagenet():
+  if FLAGS.ddp and not dist.is_initialized():
+    dist.init_process_group(
+        'xla', world_size=xm.xrt_world_size(), rank=xm.get_ordinal())
+
+  if FLAGS.ddp_pjrt:
+    from torch_xla.experimental.pjrt import DistributedDataParallel as DDP
+  else:
+    from torch.nn.parallel import DistributedDataParallel as DDP
+
   print('==> Preparing data..')
   img_dim = get_model_property('img_dim')
   if FLAGS.fake_data:
@@ -181,6 +200,15 @@ def train_imagenet():
 
   device = xm.xla_device()
   model = get_model_property('model_fn')().to(device)
+
+  # Initialization is nondeterministic with multiple threads in PjRt.
+  # Synchronize model parameters across replicas manually.
+  if pjrt.using_pjrt():
+    pjrt.broadcast_master_param(model)
+
+  if FLAGS.ddp:
+    model = DDP(model, gradient_as_bucket_view=True, broadcast_buffers=False)
+
   writer = None
   if xm.is_master_ordinal():
     writer = test_utils.get_summary_writer(FLAGS.logdir)
@@ -209,7 +237,10 @@ def train_imagenet():
       output = model(data)
       loss = loss_fn(output, target)
       loss.backward()
-      xm.optimizer_step(optimizer)
+      if FLAGS.ddp:
+        optimizer.step()
+      else:
+        xm.optimizer_step(optimizer)
       tracker.add(FLAGS.batch_size)
       if lr_scheduler:
         lr_scheduler.step()

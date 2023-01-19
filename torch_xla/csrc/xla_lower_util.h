@@ -20,8 +20,6 @@ std::vector<xla::XlaOp> CreateTopK(xla::XlaOp input, int64_t k, int64_t dim,
 
 xla::XlaOp CreateMatMul(xla::XlaOp lhs, xla::XlaOp rhs);
 
-xla::XlaOp BuildGer(xla::XlaOp lhs, xla::XlaOp rhs);
-
 xla::XlaOp BuildMatMul(xla::XlaOp lhs, xla::XlaOp rhs, xla::XlaOp bias);
 
 xla::XlaOp BuildMatMulWithMultiplier(xla::XlaOp lhs, xla::XlaOp rhs,
@@ -38,6 +36,9 @@ xla::XlaOp BuildExponential(xla::XlaOp lambda, xla::XlaOp seed,
                             xla::PrimitiveType type);
 
 xla::XlaOp BuildDropout(xla::XlaOp input, float probability, xla::XlaOp seed);
+
+xla::XlaOp BuildSigmoidBackward(xla::XlaOp grad_output, xla::XlaOp output,
+                                xla::XlaOp scalar_1);
 
 std::vector<xla::XlaOp> CreateBroadcastTensors(
     absl::Span<const xla::XlaOp> operands);
@@ -120,5 +121,14 @@ xla::XlaOp BuildXLogY(xla::XlaOp input, xla::XlaOp other);
 
 xla::XlaOp BuildRoll(xla::XlaOp input, absl::Span<const int64_t> shifts,
                      absl::Span<const int64_t> dims);
+
+xla::XlaOp BuildAddcdiv(xla::XlaOp input, xla::XlaOp t1, xla::XlaOp t2,
+                        xla::XlaOp val);
+
+xla::XlaOp BuildAddcmul(xla::XlaOp input, xla::XlaOp t1, xla::XlaOp t2,
+                        xla::XlaOp val);
+
+xla::XlaOp BuildCdistForward(xla::XlaOp x1, xla::XlaOp x2, xla::XlaOp p,
+                             bool use_hamming, bool use_chebyshev);
 
 }  // namespace torch_xla

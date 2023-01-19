@@ -10,14 +10,14 @@ load(
     "if_with_tpu_support",
 )
 load(
-    "//tensorflow/core/platform/default:build_config.bzl",
+    "//tensorflow/tsl/platform/default:build_config.bzl",
     "tf_additional_all_protos",
     "tf_proto_library",
     "tf_proto_library_cc",
     "tf_proto_library_py",
 )
 load(
-    "//tensorflow/core/platform/default:cuda_build_defs.bzl",
+    "//tensorflow/tsl/platform/default:cuda_build_defs.bzl",
     "if_cuda_is_configured",
 )
 
@@ -51,7 +51,7 @@ tf_cc_shared_object(
     }),
     visibility = ["//visibility:public"],
     deps = [
-        "computation_client_impl",
+        ":computation_client_impl",
         "//tensorflow/compiler/xla:literal_util",
         "//tensorflow/compiler/xla/client",
         "//tensorflow/compiler/xla/client:global_data",
@@ -147,16 +147,18 @@ cc_library(
         "//tensorflow/compiler/xla/client/lib:tridiagonal",
         "//tensorflow/compiler/xla/client:global_data",
         "//tensorflow/compiler/xla/client:xla_computation",
-        "//tensorflow/compiler/xla/pjrt:cpu_device",
+        "//tensorflow/compiler/xla/pjrt/gpu:se_gpu_pjrt_client",
         "//tensorflow/compiler/xla/pjrt:tpu_client",
         "//tensorflow/compiler/xla/pjrt:pjrt_client",
+        "//tensorflow/compiler/xla/pjrt:tfrt_cpu_pjrt_client",
+        "//tensorflow/compiler/xla/pjrt:pjrt_c_api_client",
         "//tensorflow/compiler/xla/rpc:grpc_stub",
         "//tensorflow/compiler/xla/service:cpu_plugin",
         "//tensorflow/compiler/xla/service:platform_util",
         "//tensorflow/compiler/xla:statusor",
         "//tensorflow/compiler/xla:xla_data_proto_cc",
         "//tensorflow/compiler/xla/service:hlo_proto_cc",
-        "//tensorflow/compiler/xla/service:hlo",
+        "//tensorflow/compiler/xla/hlo/ir:hlo",
         "//tensorflow/compiler/xla/service/spmd:spmd_partitioner",
         "//tensorflow/compiler/xrt:xrt_proto_cc",
         "//tensorflow/compiler/xrt:xrt_server",
@@ -172,12 +174,13 @@ cc_library(
         "//tensorflow/core/profiler/rpc:profiler_server_impl",
         "//tensorflow/core/profiler/rpc/client:profiler_client",
         "//tensorflow/core/protobuf/tpu:topology_proto_cc",
-        "//tensorflow/stream_executor:stream_executor_impl",
+        "//tensorflow/compiler/xla/stream_executor:stream_executor_impl",
         "@com_google_absl//absl/numeric:int128",
         "@com_google_absl//absl/strings",
     ] + if_cuda_is_configured([
         "@local_config_nccl//:nccl",
         "//tensorflow/compiler/jit:xla_gpu_device",
+        "//tensorflow/compiler/xla/stream_executor:cuda_platform",
     ]) + if_with_tpu_support([
         "//tensorflow/compiler/jit:xla_tpu_device",
         "//tensorflow/compiler/jit:xla_tpu_jit",

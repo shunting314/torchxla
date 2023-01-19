@@ -133,7 +133,7 @@ To run the tests, follow __one__ of the options below:
 * Run on Cloud TPU using the XRT client, set the XRT_TPU_CONFIG environment variable:
 
   ```Shell
-  export XRT_TPU_CONFIG="tpu_worker;0;<IP of the TPU node>:8470"
+  export XRT_TPU_CONFIG="localservice;0;localhost:51011"
   ```
 
 Note that the IP of the TPU node can change if the TPU node is reset. If _PyTorch_
@@ -144,3 +144,7 @@ If you are planning to be building from source and hence using the latest _PyTor
 it is suggested for you to select the _Nightly_ builds when you create a Cloud TPU instance.
 
 Then run `test/run_tests.sh` and `test/cpp/run_tests.sh` to verify the setup is working.
+
+### Useful materials
+1. [OP Lowering Guide](https://github.com/pytorch/xla/blob/master/OP_LOWERING_GUIDE.md)
+2. [CODEGEN MIGRATION GUIDE](https://github.com/pytorch/xla/blob/master/CODEGEN_MIGRATION_GUIDE.md)

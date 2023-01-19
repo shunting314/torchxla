@@ -93,9 +93,8 @@ std::vector<xla::ComputationClient::ExecuteChainedOp> OpByOpExecutor::BuildOps(
   for (auto& root : roots) {
     root_nodes.push_back(root.node.get());
   }
-  std::vector<const torch::lazy::Node*> post_order =
-      Util::ComputePostOrder(root_nodes);
-  XLA_VALUE_METRIC("OpByOpGraphSize", post_order.size());
+  auto post_order = torch::lazy::Util::ComputePostOrder(root_nodes);
+  TORCH_LAZY_VALUE_METRIC("OpByOpGraphSize", post_order.size());
   TF_VLOG(5) << "TensorsGraphSize=" << post_order.size();
 
   std::unordered_map<const torch::lazy::Node*, size_t> node_to_index;
@@ -124,9 +123,10 @@ std::vector<xla::ComputationClient::ExecuteChainedOp> OpByOpExecutor::BuildOps(
   for (size_t i = 0; i < post_order.size(); ++i) {
     const torch::lazy::Node* node = post_order[i];
     xla::ComputationClient::ExecuteChainedOp& cxop = chained_exec_ops[i];
-    const DeviceData* device_data = DeviceData::Cast(node);
-    if (device_data != nullptr) {
-      cxop.device_data = UnwrapXlaData(device_data->data());
+    const auto backend_data =
+        torch::lazy::getBackend()->GetComputationDataFromNode(node);
+    if (backend_data != nullptr) {
+      cxop.device_data = UnwrapXlaData(backend_data);
       ops_shapes[i] = &cxop.device_data->shape();
       device_data_ops[i] = true;
     } else {
@@ -143,7 +143,7 @@ std::vector<xla::ComputationClient::ExecuteChainedOp> OpByOpExecutor::BuildOps(
           ComputeNodeKey(node, op_input_shapes, nodes_key_seed);
       cxop.computation = compile_cache_.Get(cache_key);
       if (cxop.computation == nullptr) {
-        XLA_COUNTER("OpByOpCompileCacheMiss", 1);
+        TORCH_LAZY_COUNTER("OpByOpCompileCacheMiss", 1);
 
         // Within a single IR graph, there can be many duplicated IR nodes, so
         // make sure we do not issue an XLA compilation for each one of those.
